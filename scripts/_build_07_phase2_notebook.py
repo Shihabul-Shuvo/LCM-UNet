@@ -105,23 +105,21 @@ print("pytest: all green.")
 cells.append(nbf.v4.new_code_cell(
 '''# env.json + ensure Kvasir-SEG, CVC-ClinicDB, ISIC2017, ISIC2018 are present
 # and their splits are built (Phase-2 needs all four datasets; Phase-1 only
-# needed Kvasir).
+# needed Kvasir). Idempotent -- fast no-op if already ready in Drive (see
+# lcmunet/data/prepare_all.py, also called automatically every session by
+# notebooks/colab_runner.ipynb).
 from lcmunet.paths import get_paths
 from lcmunet.env_report import write_env_json
-from lcmunet.data.download import ensure_kvasir, ensure_cvc, ensure_isic
-from lcmunet.data.splits import build_kvasir_split, build_cvc_split, build_isic_split
+from lcmunet.data.prepare_all import prepare_all_datasets
 
 paths = get_paths()
 write_env_json(paths.results, repo_root=".")
 
-ensure_kvasir(paths.data_raw)
-build_kvasir_split(paths)
-ensure_cvc(paths.data_raw)
-build_cvc_split(paths)
-ensure_isic(paths.data_raw, "isic2017")
-build_isic_split(paths, "isic2017")
-ensure_isic(paths.data_raw, "isic2018")
-build_isic_split(paths, "isic2018")
+data_report = prepare_all_datasets(paths)
+assert all(row["status"] == "PASS" for row in data_report.values()), (
+    "Phase-2 needs all four datasets ready -- see the FAILED rows above for "
+    "exactly what to fix, then re-run this cell."
+)
 
 import torch
 print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none (CPU)")

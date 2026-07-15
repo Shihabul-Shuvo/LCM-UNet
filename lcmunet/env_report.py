@@ -64,9 +64,29 @@ def collect_env_info(repo_root: str | Path = ".") -> Dict[str, Any]:
 
 
 def write_env_json(results_dir: str | Path, repo_root: str | Path = ".") -> Path:
+    """Refreshes every collect_env_info() key (SCAN_IMPL, GPU, etc.) with
+    current values, but -- via update_env_json -- preserves any extra key
+    written by something else (e.g. "isic2017_source", written by
+    lcmunet.data.download.ensure_isic2017) regardless of which one ran
+    first in a given session.
+    """
     info = collect_env_info(repo_root)
+    return update_env_json(results_dir, info)
+
+
+def update_env_json(results_dir: str | Path, updates: Dict[str, Any]) -> Path:
+    """Merges `updates` into the existing results/env.json (creating it if
+    absent) without clobbering fields written by write_env_json (e.g.
+    SCAN_IMPL) -- for provenance facts recorded outside the 01_env.ipynb
+    GPU-gate flow (e.g. which ISIC2017 source -- S3 or Kaggle -- succeeded).
+    """
     path = Path(results_dir) / "env.json"
+    data: Dict[str, Any] = {}
+    if path.is_file():
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    data.update(updates)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(info, f, indent=2, sort_keys=True)
+        json.dump(data, f, indent=2, sort_keys=True)
     return path
