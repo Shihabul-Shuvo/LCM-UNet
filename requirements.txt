@@ -1,0 +1,27 @@
+# torch/torchvision are deliberately UNPINNED: `pip install -r requirements.txt`
+# treats an already-satisfied, unpinned requirement as a no-op (pip does not
+# upgrade/reinstall without --upgrade), so this is safe to run in Colab
+# without clobbering Colab's pre-built CUDA-matched torch wheel. NEVER add
+# --upgrade when installing this file, and never pin a torch/torchvision
+# version here.
+torch
+torchvision
+numpy
+pandas>=2.0
+pyyaml>=6.0
+scipy
+scikit-image
+opencv-python-headless
+tqdm
+matplotlib
+thop
+fvcore
+pytest>=8.0
+timm==0.4.12  # required by third_party/UltraLight-VM-UNet, MALUNet, EGE-UNet (trunc_normal_)
+einops  # required by third_party/EGE-UNet (models/egeunet.py)
+
+# mamba-ssm / causal-conv1d are NOT listed here on purpose: their CUDA build
+# is the Gate-0 GPU gate (docs/LCM-UNet_FINAL_methodology_v4.1.md §5.1/§13),
+# run and reported by the user in Colab (GLOBAL RULES rule 5), with a
+# pure-PyTorch fallback (lcmunet/scan.py) if the build fails or is flaky.
+# See notebooks/01_env.ipynb for the (best-effort, non-fatal) install attempt.
