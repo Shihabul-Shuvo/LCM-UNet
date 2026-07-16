@@ -80,11 +80,12 @@ def list_kvasir_pairs(data_raw_dir: Path) -> List[RawPair]:
     if not pairs:
         raise RawDataMissingError(
             "kvasir_seg",
-            "Kvasir-SEG should auto-download (see download.py). If this failed "
-            "(e.g. no network in this environment), download it yourself from "
-            "https://datasets.simula.no/downloads/kvasir-seg.zip and extract "
-            f"it so that {root} contains 'images/' and 'masks/' subfolders "
-            "(1000 matching .jpg files each).",
+            "No Kvasir-SEG data found. Download it from "
+            "https://datasets.simula.no/downloads/kvasir-seg.zip and place the "
+            f".zip file anywhere under {root} (any filename) -- it will be "
+            "auto-extracted next run (lcmunet/data/download.py). Expected "
+            "structure after extraction: 'images/' and 'masks/' subfolders "
+            "with 1000 matching .jpg files each.",
         )
     return pairs
 
@@ -114,16 +115,18 @@ def _find_subdir(root: Path, candidates: Sequence[str]) -> Optional[Path]:
 
 def _cvc_instructions(root: Path) -> str:
     return (
-        "CVC-ClinicDB is not auto-downloadable (registration required). "
+        "No CVC-ClinicDB data found (or the placed .zip's internal layout "
+        "wasn't recognised -- see any 'Found ...; extracting' / 'wrapped in "
+        "an extra folder' messages above for what was actually detected). "
         "Download it from https://polyp.grand-challenge.org/CVCClinicDB/ "
-        "(or a mirror such as "
-        "https://www.kaggle.com/datasets/balraj98/cvcclinicdb) and place it "
-        f"so that {root} contains an 'Original' (or 'images') folder with "
-        "612 image files and a 'Ground Truth' (or 'masks') folder with 612 "
+        "(registration required) or the Kaggle mirror "
+        "'balraj98/cvcclinicdb' and place the .zip file anywhere under "
+        f"{root} (any filename) -- it will be auto-extracted next run "
+        "(lcmunet/data/download.py). Expected structure after extraction: "
+        f"{root} contains an 'Original' (or 'images') folder with 612 image "
+        "files and a 'Ground Truth' (or 'masks') folder with 612 "
         "corresponding mask files, named/numbered consistently (e.g. "
-        "1.tif..612.tif or 1.png..612.png). A single .zip placed directly in "
-        f"{root.parent} with 'cvc' in its filename will be auto-extracted "
-        "(download.py)."
+        "1.tif..612.tif or 1.png..612.png)."
     )
 
 
@@ -155,14 +158,14 @@ def _isic_instructions(version: str, root: Path) -> str:
     tag = _ISIC_TAGS[version]
     n = ISIC_IMAGE_COUNTS[version]
     return (
-        f"{tag} is not auto-downloadable (registration required). Register "
-        "at https://challenge.isic-archive.com/ and download the "
-        f"{tag} Task 1-2 Training Input images and Task 1 Training Ground "
-        f"Truth masks. Extract so that {root} contains "
+        f"No {tag} data found. Register at https://challenge.isic-archive.com/ "
+        f"(or use the Kaggle mirror) and download the {tag} Task 1-2 Training "
+        f"Input images and Task 1 Training Ground Truth masks. Place the .zip "
+        f"file anywhere under {root} (any filename) -- it will be "
+        "auto-extracted and normalised next run (lcmunet/data/download.py). "
+        f"After normalisation {root} will contain "
         f"'{tag}_Task1-2_Training_Input/' ({n} .jpg images) and "
-        f"'{tag}_Task1_Training_GroundTruth/' ({n} *_segmentation.png "
-        f"masks). A single .zip placed directly in {root.parent} with "
-        f"'{tag.lower()}' in its filename will be auto-extracted (download.py)."
+        f"'{tag}_Task1_Training_GroundTruth/' ({n} *_segmentation.png masks)."
     )
 
 
