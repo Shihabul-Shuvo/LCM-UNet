@@ -22,3 +22,5 @@ kaggle.json
 .pytest_cache/
 
 docs/
+kvasir-seg/
+cvc_clinicdb/

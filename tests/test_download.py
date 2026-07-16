@@ -276,6 +276,29 @@ def test_ensure_kvasir_full_flow_from_placed_zip(paths, monkeypatch, tmp_path):
     assert len(rl.list_kvasir_pairs(paths.data_raw)) == n
 
 
+def test_ensure_kvasir_handles_double_nested_wrapper(paths, monkeypatch, tmp_path):
+    """The debeshjha1/kvasirseg Kaggle mirror nests 'Kvasir-SEG/Kvasir-SEG/
+    images/...' (two wrapper levels, confirmed against a real extracted
+    archive), plus extra 'annotated_images/'/'bbox/' folders and a PDF that
+    must be ignored, not mistaken for images/masks."""
+    n = 5
+    monkeypatch.setattr(rl, "KVASIR_IMAGE_COUNT", n)
+
+    files = {}
+    for i in range(n):
+        files[f"Kvasir-SEG/Kvasir-SEG/images/img{i}.jpg"] = b"img"
+        files[f"Kvasir-SEG/Kvasir-SEG/masks/img{i}.jpg"] = b"mask"
+        files[f"Kvasir-SEG/Kvasir-SEG/annotated_images/img{i}.jpg"] = b"ann"
+        files[f"Kvasir-SEG/Kvasir-SEG/bbox/img{i}.jpg"] = b"bbox"
+    files["Kvasir-SEG/Kvasir-SEG/1911.07069.pdf"] = b"pdf"
+    zip_path = _make_zip(tmp_path / "kvasir-seg.zip", files)
+    monkeypatch.setattr(dl, "_find_any_zip", lambda root: zip_path)
+
+    n_pairs = dl.ensure_kvasir(paths.data_raw)
+    assert n_pairs == n
+    assert len(rl.list_kvasir_pairs(paths.data_raw)) == n
+
+
 def test_ensure_isic2018_full_flow_from_placed_zip(paths, monkeypatch, tmp_path):
     n = 50
     monkeypatch.setitem(rl.ISIC_IMAGE_COUNTS, "isic2018", n)

@@ -117,11 +117,18 @@ def _select_cvc_format(root: Path) -> None:
         shutil.rmtree(lowered[fmt])
 
 
-def _relocate_nested_extraction(root: Path, expected_subdir_groups: Sequence[Sequence[str]]) -> None:
+def _relocate_nested_extraction(root: Path, expected_subdir_groups: Sequence[Sequence[str]], max_depth: int = 5) -> None:
     """If `root` doesn't directly contain any of the expected subdirectories
-    (case-insensitive) but exactly one nested child does, move that child's
-    contents up into root -- handles archives that wrap everything in an
-    extra top-level folder (e.g. 'cvcclinicdb-master/Original/...')."""
+    (case-insensitive), descend through a chain of pure single-subdirectory
+    wrapper folders -- each level with exactly one nested directory and
+    nothing else meaningful to disambiguate -- until a level directly
+    contains the expected subdirectories, then flatten that level's contents
+    up into root and discard the now-empty wrapper chain. Handles archives
+    wrapped in one extra folder (e.g. 'cvcclinicdb-master/Original/...') AND
+    double-wrapped ones (e.g. the debeshjha1/kvasirseg Kaggle mirror nests
+    'Kvasir-SEG/Kvasir-SEG/images/...'). Stops (without guessing) the moment
+    a level has zero or multiple directory children and still doesn't match
+    -- list_*_pairs's own fail-loud error takes over from there."""
 
     def has_any(d: Path) -> bool:
         if not d.is_dir():
@@ -129,15 +136,26 @@ def _relocate_nested_extraction(root: Path, expected_subdir_groups: Sequence[Seq
         lowered = {p.name.lower() for p in d.iterdir() if p.is_dir()}
         return any(any(name in lowered for name in group) for group in expected_subdir_groups)
 
-    if has_any(root):
-        return
-    nested_hits = [c for c in root.iterdir() if c.is_dir() and has_any(c)]
-    if len(nested_hits) == 1:
-        wrapper = nested_hits[0]
-        print(f"Extraction wrapped in an extra folder ({wrapper.name}); flattening into {root}.")
-        for item in wrapper.iterdir():
-            shutil.move(str(item), str(root / item.name))
-        wrapper.rmdir()
+    def only_subdir(d: Path) -> Optional[Path]:
+        subdirs = [c for c in d.iterdir() if c.is_dir()]
+        return subdirs[0] if len(subdirs) == 1 else None
+
+    chain: list[Path] = []
+    current = root
+    for _ in range(max_depth):
+        if has_any(current):
+            if not chain:
+                return  # already flat at root -- nothing to do
+            print(f"Extraction wrapped in {len(chain)} extra folder(s) ({'/'.join(p.name for p in chain)}); flattening into {root}.")
+            for item in current.iterdir():
+                shutil.move(str(item), str(root / item.name))
+            shutil.rmtree(chain[0])
+            return
+        nxt = only_subdir(current)
+        if nxt is None:
+            return  # dead end (nothing nested) or ambiguous (multiple candidates) -- don't guess
+        chain.append(nxt)
+        current = nxt
 
 
 def _iter_leaf_dirs_with_many_files(root: Path, exts: Sequence[str], min_files: int):
