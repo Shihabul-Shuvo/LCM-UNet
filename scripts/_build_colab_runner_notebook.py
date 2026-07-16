@@ -166,11 +166,14 @@ for dataset in rl.DATASET_NAMES:
 ))
 
 cells.append(nbf.v4.new_code_cell(
-"""# (g) single call that drives the job queue (results/manifest.json on Drive).
+"""# (g) single call that drives the job queue (results/manifest.json on Drive),
+# training each PENDING job with lcmunet.engine.run_one (resumable: checkpoints
+# every epoch, so a killed Colab session picks up exactly where it left off).
 # Discovering/enqueuing work above is automatic; actually running hours of
-# training is a separate, deliberate action -- call run_all_pending()
-# yourself in a new cell/session when you're ready, it is never invoked
-# automatically by Run All.
+# training is a separate, deliberate action -- THIS CELL ONLY DEFINES THE
+# FUNCTION. Call run_all_pending() yourself in a new cell/session when you're
+# ready to spend GPU-hours; it is never invoked automatically by Run All.
+from lcmunet import engine
 from lcmunet.run_manifest import run_queue
 
 
@@ -178,14 +181,12 @@ def run_all_pending(max_minutes: float = 300.0) -> None:
     \"\"\"Process PENDING jobs in results/manifest.json until empty or time runs out.
 
     Safe to call from a brand-new Colab session after a disconnect: stale
-    RUNNING jobs (killed by the previous session) are reclaimed automatically.
+    RUNNING jobs (killed by the previous session) are reclaimed automatically,
+    and lcmunet.engine.run_one resumes each job from its last saved checkpoint.
     \"\"\"
 
     def runner_fn(job):
-        raise NotImplementedError(
-            "No training entrypoint yet — infra layer only (Week 1). "
-            f"Job requested: {job['config_id']} -> {job['config_yaml_path']}"
-        )
+        engine.run_one(job, paths=paths)
 
     run_queue(paths.results, runner_fn, max_minutes=max_minutes)
 

@@ -88,6 +88,35 @@ def _find_any_zip(root: Path) -> Optional[Path]:
     return matches[0]
 
 
+_CVC_FORMAT_PREFERENCE = ("png", "tif", "tiff")
+
+
+def _select_cvc_format(root: Path) -> None:
+    """The official CVC-ClinicDB release (and the balraj98 Kaggle mirror)
+    ship BOTH a 'PNG/' and a 'TIF/' top-level folder, each containing its own
+    complete 'Original'/'Ground Truth' pair for the same 612 frames -- pick
+    one (PNG preferred: no TIFF codec dependency) and flatten it into root;
+    delete the other format folder so it can never spuriously match. No-op
+    if root already directly contains Original/Ground Truth (archives that
+    don't have this PNG/TIF split)."""
+    if not root.is_dir():
+        return
+    lowered = {p.name.lower(): p for p in root.iterdir() if p.is_dir()}
+    if any(name in lowered for name in rl._CVC_IMAGE_DIR_NAMES + rl._CVC_MASK_DIR_NAMES):
+        return  # already flat -- nothing to select between
+    chosen_fmt = next((fmt for fmt in _CVC_FORMAT_PREFERENCE if fmt in lowered), None)
+    if chosen_fmt is None:
+        return  # not this layout; list_cvc_pairs will raise its own fail-loud error
+    chosen = lowered[chosen_fmt]
+    other_fmts = sorted(fmt for fmt in _CVC_FORMAT_PREFERENCE if fmt in lowered and fmt != chosen_fmt)
+    print(f"CVC-ClinicDB archive ships multiple formats {sorted(lowered)}; using {chosen.name}/ (flattening into {root}, discarding {other_fmts}).")
+    for item in chosen.iterdir():
+        shutil.move(str(item), str(root / item.name))
+    chosen.rmdir()
+    for fmt in other_fmts:
+        shutil.rmtree(lowered[fmt])
+
+
 def _relocate_nested_extraction(root: Path, expected_subdir_groups: Sequence[Sequence[str]]) -> None:
     """If `root` doesn't directly contain any of the expected subdirectories
     (case-insensitive) but exactly one nested child does, move that child's
@@ -271,7 +300,8 @@ def ensure_cvc(data_raw_dir: str | Path) -> int:
 
     print(f"Found {zip_path}; extracting -> {root} ...")
     _extract_zip(zip_path, root)
-    _relocate_nested_extraction(root, [rl._CVC_IMAGE_DIR_NAMES, rl._CVC_MASK_DIR_NAMES])
+    _relocate_nested_extraction(root, [rl._CVC_IMAGE_DIR_NAMES, rl._CVC_MASK_DIR_NAMES, _CVC_FORMAT_PREFERENCE])
+    _select_cvc_format(root)
     pairs = rl.list_cvc_pairs(data_raw_dir)
 
     if len(pairs) != rl.CVC_IMAGE_COUNT:

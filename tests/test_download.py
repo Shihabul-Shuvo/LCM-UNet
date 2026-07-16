@@ -326,6 +326,33 @@ def test_ensure_cvc_handles_extra_wrapper_folder(paths, monkeypatch, tmp_path):
     assert n_pairs == n
 
 
+def test_ensure_cvc_picks_png_over_tif_when_archive_ships_both(paths, monkeypatch, tmp_path):
+    """The official CVC-ClinicDB release and the balraj98 Kaggle mirror both
+    ship a top-level PNG/ and TIF/ folder, each a complete Original/Ground
+    Truth pair for the same frames, plus class_dict.csv/metadata.csv --
+    confirmed against a real extracted archive. PNG must be selected and
+    TIF discarded so exactly one set of 612 pairs results, not a conflict."""
+    n = 6
+    monkeypatch.setattr(rl, "CVC_IMAGE_COUNT", n)
+
+    files = {}
+    for fmt, ext in (("PNG", "png"), ("TIF", "tif")):
+        for i in range(1, n + 1):
+            files[f"{fmt}/Original/{i}.{ext}"] = b"img"
+            files[f"{fmt}/Ground Truth/{i}.{ext}"] = b"mask"
+    files["class_dict.csv"] = b"x"
+    files["metadata.csv"] = b"x"
+    zip_path = _make_zip(tmp_path / "cvc_png_tif.zip", files)
+    monkeypatch.setattr(dl, "_find_any_zip", lambda root: zip_path)
+
+    n_pairs = dl.ensure_cvc(paths.data_raw)
+    assert n_pairs == n
+
+    root = rl.cvc_root(paths.data_raw)
+    assert not (root / "TIF").exists()
+    assert (root / "Original" / "1.png").exists()
+
+
 def test_ensure_isic2017_full_flow_from_placed_zip(paths, monkeypatch, tmp_path):
     train_n, val_n, test_n, keep_train = 25, 20, 20, 10
     monkeypatch.setattr(dl, "ISIC2017_TRAIN_KEEP", keep_train)
