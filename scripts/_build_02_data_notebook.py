@@ -21,19 +21,21 @@ runs automatically every session (lcmunet.data.prepare_all.prepare_all_datasets)
 that's done, you never need to open this notebook again; colab_runner.ipynb
 alone keeps it up to date.
 
+Nothing is downloaded automatically -- you place each dataset's .zip
+yourself under `DRIVE_ROOT/data_raw/<Name>/` (any filename; see
+`lcmunet/data/download.py`'s module docstring for exactly where to get each
+one: Kvasir-SEG, CVC-ClinicDB, ISIC2017, ISIC2018).
+
 1. Mounts Drive and pulls this repo fresh.
-2. Downloads, extracts, and splits ALL FOUR datasets automatically:
-   Kvasir-SEG (direct wget), CVC-ClinicDB and ISIC2018 (Kaggle, needs
-   DRIVE_ROOT/secrets/kaggle.json once), ISIC2017 (official S3, falling
-   back to Kaggle only if S3 fails). Idempotent -- already-ready datasets
-   are skipped instantly. This is where the **mandatory CVC-ClinicDB
-   sequence-level leakage guard** runs and asserts.
+2. Extracts + splits whichever of the four datasets already have a .zip
+   placed. Idempotent -- already-prepared datasets are skipped instantly.
+   This is where the **mandatory CVC-ClinicDB sequence-level leakage
+   guard** runs and asserts.
 3. Sanity-checks DataLoaders for whichever datasets came back PASS.
 
-**Action needed from you:** for any dataset reported FAILED below (most
-commonly: missing DRIVE_ROOT/secrets/kaggle.json), follow the printed
-instructions and re-run this notebook (it will only redo the missing
-pieces).
+**Action needed from you:** for any dataset reported FAILED below (no .zip
+found yet), follow the printed instructions to download+place it, then
+re-run this notebook (it will only redo the missing pieces).
 """
 ))
 
@@ -69,8 +71,9 @@ cells.append(nbf.v4.new_code_cell(
 ))
 
 cells.append(nbf.v4.new_code_cell(
-"""# Download + extract + split all four datasets in one call (idempotent --
-# safe and fast to re-run every session). See lcmunet/data/prepare_all.py.
+"""# Extract + split all four datasets in one call (idempotent -- safe and
+# fast to re-run every session; nothing is downloaded here, see
+# lcmunet/data/prepare_all.py / lcmunet/data/download.py).
 from lcmunet.paths import get_paths
 from lcmunet.data.prepare_all import prepare_all_datasets
 
@@ -120,8 +123,9 @@ Paste back:
 - Whether the CVC leakage assertion passed (no `AssertionError` raised) and
   the `Verify the CVC 29-sequence mapping against the original
   documentation before submission.` reminder.
-- Which ISIC2017 source was used (`s3` or `kaggle_fallback` -- see
-  `results/env.json`'s `isic2017_source` field, also printed above).
+- For ISIC2017, the detected bucket layout log lines and
+  `data_raw/ISIC2017/isic2017_source_manifest.json`'s `source_zip` field
+  (which archive was actually used).
 - The DataLoader sanity-check batch shapes.
 """
 ))

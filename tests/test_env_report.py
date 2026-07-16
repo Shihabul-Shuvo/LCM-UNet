@@ -1,15 +1,14 @@
 import json
-from pathlib import Path
 
 from lcmunet import env_report
 
 
 def test_update_env_json_creates_file_when_absent(tmp_path):
     results_dir = tmp_path / "results"
-    path = env_report.update_env_json(results_dir, {"isic2017_source": "s3"})
+    path = env_report.update_env_json(results_dir, {"custom_note": "hello"})
 
     assert path == results_dir / "env.json"
-    assert json.loads(path.read_text(encoding="utf-8")) == {"isic2017_source": "s3"}
+    assert json.loads(path.read_text(encoding="utf-8")) == {"custom_note": "hello"}
 
 
 def test_update_env_json_merges_without_clobbering_existing_keys(tmp_path):
@@ -17,31 +16,32 @@ def test_update_env_json_merges_without_clobbering_existing_keys(tmp_path):
     results_dir.mkdir(parents=True)
     (results_dir / "env.json").write_text(json.dumps({"scan_impl": "cuda", "gpu_name": "Tesla T4"}), encoding="utf-8")
 
-    env_report.update_env_json(results_dir, {"isic2017_source": "kaggle_fallback"})
+    env_report.update_env_json(results_dir, {"custom_note": "hello"})
 
     data = json.loads((results_dir / "env.json").read_text(encoding="utf-8"))
     assert data["scan_impl"] == "cuda"
     assert data["gpu_name"] == "Tesla T4"
-    assert data["isic2017_source"] == "kaggle_fallback"
+    assert data["custom_note"] == "hello"
 
 
 def test_update_env_json_overwrites_same_key(tmp_path):
     results_dir = tmp_path / "results"
-    env_report.update_env_json(results_dir, {"isic2017_source": "s3"})
-    env_report.update_env_json(results_dir, {"isic2017_source": "kaggle_fallback"})
+    env_report.update_env_json(results_dir, {"custom_note": "first"})
+    env_report.update_env_json(results_dir, {"custom_note": "second"})
 
     data = json.loads((results_dir / "env.json").read_text(encoding="utf-8"))
-    assert data["isic2017_source"] == "kaggle_fallback"
+    assert data["custom_note"] == "second"
 
 
-def test_write_env_json_preserves_isic2017_source_written_first(tmp_path):
-    """Regardless of run order (prepare_all_datasets before or after
-    01_env.ipynb's write_env_json), isic2017_source must survive."""
+def test_write_env_json_preserves_keys_written_by_something_else_first(tmp_path):
+    """Regardless of run order, an extra key written via update_env_json by
+    some other module must survive a later write_env_json() refresh
+    (write_env_json only owns collect_env_info()'s own fixed key set)."""
     results_dir = tmp_path / "results"
-    env_report.update_env_json(results_dir, {"isic2017_source": "s3"})
+    env_report.update_env_json(results_dir, {"custom_note": "hello"})
 
     env_report.write_env_json(results_dir, repo_root=".")
 
     data = json.loads((results_dir / "env.json").read_text(encoding="utf-8"))
-    assert data["isic2017_source"] == "s3"
+    assert data["custom_note"] == "hello"
     assert "scan_impl" in data  # collect_env_info's own keys are still (freshly) present

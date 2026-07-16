@@ -1,32 +1,38 @@
-"""lcmunet/data/prepare_all.py -- orchestration only (ensure_dataset_ready
-and the split builders are exercised directly in test_download.py /
-test_splits.py-equivalent real-data tests); here we monkeypatch both layers
-to verify the per-dataset isolation and summary-table contract."""
+"""lcmunet/data/prepare_all.py -- orchestration + the data/<name>/prepared.json
+marker cache. ensure_dataset_ready and the split builders are exercised
+directly in test_download.py; here we monkeypatch both layers to verify
+per-dataset isolation, the marker fast-path, and the summary-table contract.
+"""
 
 from __future__ import annotations
 
-import pytest
+import json
 
 from lcmunet.data import prepare_all as pa
 from lcmunet.data import raw_layout as rl
-from lcmunet.data.kaggle_auth import KaggleAuthMissingError
+
+
+def _patch_all_pass(monkeypatch, n_pairs=10, counts=None):
+    counts = counts or {"train": 8, "val": 1, "test": 1}
+    monkeypatch.setattr(pa, "ensure_dataset_ready", lambda name, data_raw_dir: n_pairs)
+    monkeypatch.setattr(pa, "_SPLIT_BUILDERS", {name: (lambda p: {"counts": counts}) for name in rl.DATASET_NAMES})
 
 
 def test_prepare_all_datasets_all_pass(paths, monkeypatch):
-    monkeypatch.setattr(pa, "ensure_dataset_ready", lambda name, p: 10)
-    monkeypatch.setattr(pa, "_SPLIT_BUILDERS", {name: (lambda p: {"counts": {"train": 8, "val": 1, "test": 1}}) for name in rl.DATASET_NAMES})
+    _patch_all_pass(monkeypatch)
 
     report = pa.prepare_all_datasets(paths)
 
     assert set(report) == set(rl.DATASET_NAMES)
     assert all(row["status"] == "PASS" for row in report.values())
     assert all(row["n_pairs"] == 10 for row in report.values())
+    assert all(row["cached"] is False for row in report.values())
 
 
 def test_prepare_all_datasets_one_failure_does_not_block_others(paths, monkeypatch):
-    def flaky_ensure(name, p):
+    def flaky_ensure(name, data_raw_dir):
         if name == "cvc_clinicdb":
-            raise KaggleAuthMissingError()
+            raise rl.RawDataMissingError("cvc_clinicdb", "No CVC-ClinicDB .zip found under ...")
         return 5
 
     monkeypatch.setattr(pa, "ensure_dataset_ready", flaky_ensure)
@@ -35,29 +41,14 @@ def test_prepare_all_datasets_one_failure_does_not_block_others(paths, monkeypat
     report = pa.prepare_all_datasets(paths)
 
     assert report["cvc_clinicdb"]["status"] == "FAIL"
-    assert "kaggle.json" in report["cvc_clinicdb"]["error"]
+    assert "No CVC-ClinicDB .zip found" in report["cvc_clinicdb"]["error"]
     for name in rl.DATASET_NAMES:
         if name != "cvc_clinicdb":
             assert report[name]["status"] == "PASS"
 
 
-def test_prepare_all_datasets_raw_data_missing_is_caught(paths, monkeypatch):
-    def missing_ensure(name, p):
-        if name == "isic2017":
-            raise rl.RawDataMissingError("isic2017", "download it from ...")
-        return 1
-
-    monkeypatch.setattr(pa, "ensure_dataset_ready", missing_ensure)
-    monkeypatch.setattr(pa, "_SPLIT_BUILDERS", {name: (lambda p: {"counts": {"train": 0, "val": 0, "test": 0}}) for name in rl.DATASET_NAMES})
-
-    report = pa.prepare_all_datasets(paths)
-
-    assert report["isic2017"]["status"] == "FAIL"
-    assert report["kvasir_seg"]["status"] == "PASS"
-
-
 def test_prepare_all_datasets_generic_exception_is_caught(paths, monkeypatch):
-    def boom_ensure(name, p):
+    def boom_ensure(name, data_raw_dir):
         if name == "isic2018":
             raise RuntimeError("archive layout changed")
         return 1
@@ -73,12 +64,12 @@ def test_prepare_all_datasets_generic_exception_is_caught(paths, monkeypatch):
 
 def test_prepare_all_datasets_split_builder_failure_is_also_caught(paths, monkeypatch):
     """A split-builder failure (e.g. the CVC sequence-leakage assertion)
-    must be caught exactly like a download failure -- it is not special-cased."""
+    must be caught exactly like an extraction failure -- it is not special-cased."""
 
     def flaky_split(p):
         raise AssertionError("CVC sequence-level split leakage: 1 sequence(s) span more than one partition")
 
-    monkeypatch.setattr(pa, "ensure_dataset_ready", lambda name, p: 5)
+    monkeypatch.setattr(pa, "ensure_dataset_ready", lambda name, data_raw_dir: 5)
     builders = {name: (lambda p: {"counts": {"train": 1, "val": 1, "test": 1}}) for name in rl.DATASET_NAMES}
     builders["cvc_clinicdb"] = flaky_split
     monkeypatch.setattr(pa, "_SPLIT_BUILDERS", builders)
@@ -91,8 +82,7 @@ def test_prepare_all_datasets_split_builder_failure_is_also_caught(paths, monkey
 
 
 def test_print_summary_table_does_not_crash(paths, monkeypatch, capsys):
-    monkeypatch.setattr(pa, "ensure_dataset_ready", lambda name, p: 5)
-    monkeypatch.setattr(pa, "_SPLIT_BUILDERS", {name: (lambda p: {"counts": {"train": 3, "val": 1, "test": 1}}) for name in rl.DATASET_NAMES})
+    _patch_all_pass(monkeypatch)
 
     pa.prepare_all_datasets(paths)
     out = capsys.readouterr().out
@@ -106,8 +96,49 @@ def test_prepare_all_datasets_defaults_to_get_paths(monkeypatch, tmp_path):
     fake_paths = paths_module.get_paths(root=tmp_path / "drive_root")
     monkeypatch.setattr(paths_module, "get_paths", lambda: fake_paths)
 
-    monkeypatch.setattr(pa, "ensure_dataset_ready", lambda name, p: 1)
-    monkeypatch.setattr(pa, "_SPLIT_BUILDERS", {name: (lambda p: {"counts": {"train": 0, "val": 0, "test": 1}}) for name in rl.DATASET_NAMES})
+    _patch_all_pass(monkeypatch, counts={"train": 0, "val": 0, "test": 1})
 
     report = pa.prepare_all_datasets()  # paths=None -> should call get_paths()
     assert all(row["status"] == "PASS" for row in report.values())
+
+
+# ---- data/<name>/prepared.json marker cache ---------------------------------
+
+
+def test_marker_write_and_load_roundtrip(paths):
+    path = pa._write_marker(paths, "kvasir_seg", 1000, {"train": 800, "val": 100, "test": 100})
+    assert path == paths.data / "kvasir_seg" / "prepared.json"
+
+    cached = pa._load_marker(paths, "kvasir_seg")
+    assert cached == {"n_pairs": 1000, "counts": {"train": 800, "val": 100, "test": 100}}
+
+
+def test_marker_absent_returns_none(paths):
+    assert pa._load_marker(paths, "kvasir_seg") is None
+
+
+def test_marker_corrupt_file_treated_as_absent(paths):
+    marker_path = paths.data / "kvasir_seg" / "prepared.json"
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text("{not valid json", encoding="utf-8")
+
+    assert pa._load_marker(paths, "kvasir_seg") is None
+
+
+def test_prepare_one_dataset_skips_instantly_when_marker_present(paths, monkeypatch):
+    pa._write_marker(paths, "kvasir_seg", 1000, {"train": 800, "val": 100, "test": 100})
+
+    monkeypatch.setattr(pa, "ensure_dataset_ready", lambda name, data_raw_dir: (_ for _ in ()).throw(AssertionError("should not extract when cached")))
+    monkeypatch.setattr(pa, "_SPLIT_BUILDERS", {"kvasir_seg": lambda p: (_ for _ in ()).throw(AssertionError("should not re-split when cached"))})
+
+    result = pa._prepare_one_dataset("kvasir_seg", paths)
+    assert result == {"status": "PASS", "n_pairs": 1000, "counts": {"train": 800, "val": 100, "test": 100}, "cached": True}
+
+
+def test_prepare_all_datasets_writes_marker_after_first_success(paths, monkeypatch):
+    _patch_all_pass(monkeypatch, n_pairs=612, counts={"train": 490, "val": 61, "test": 61})
+
+    pa.prepare_all_datasets(paths)
+
+    marker = json.loads((paths.data / "cvc_clinicdb" / "prepared.json").read_text(encoding="utf-8"))
+    assert marker == {"n_pairs": 612, "counts": {"train": 490, "val": 61, "test": 61}}

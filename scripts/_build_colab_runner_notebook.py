@@ -21,23 +21,25 @@ code — every run it pulls the latest code fresh from GitHub, so there is
 never a divergence between what's on GitHub and what runs here.
 
 Run All top to bottom each session. Zero manual steps beyond the one-time
-Kaggle token placement below:
+dataset placement below:
 - Drive mounts, the repo is pulled, and dependencies install.
 - ALL FOUR datasets (Kvasir-SEG, CVC-ClinicDB, ISIC2017, ISIC2018) are
-  downloaded, extracted, and split automatically
+  extracted and split automatically from whatever .zip you've placed
   (`lcmunet.data.prepare_all.prepare_all_datasets`) -- idempotent, so a
-  dataset already cached in Drive is a fast no-op on every later session.
+  dataset already prepared in Drive is skipped instantly on every later
+  session.
 - `run_all_pending()` resumes the training job queue from Google Drive with
   zero manual state (see `lcmunet/run_manifest.py`).
 
 If the session dies mid-run, just reopen this notebook and Run All again.
 
-**One-time setup:** CVC-ClinicDB, ISIC2018, and the ISIC2017 Kaggle fallback
-need a Kaggle API token. Create one at kaggle.com -> Settings -> Create New
-Token, and place the downloaded `kaggle.json` at
-`DRIVE_ROOT/secrets/kaggle.json` (i.e. `.../MyDrive/LCM-UNet/secrets/kaggle.json`).
-Kvasir-SEG and the ISIC2017 S3 primary path don't need this and work
-regardless.
+**One-time setup:** download each dataset's .zip yourself (see
+`lcmunet/data/download.py`'s module docstring for exactly where to get each
+one) and place it anywhere under `DRIVE_ROOT/data_raw/<Name>/` (any
+filename) -- `Kvasir-SEG/`, `CVC-ClinicDB/`, `ISIC2017/`, `ISIC2018/`. This
+notebook never downloads anything itself; it only extracts + splits what's
+already there. Any dataset with no .zip placed yet is reported FAILED with
+the exact download link/filename to use, without blocking the others.
 """
 ))
 
@@ -51,8 +53,8 @@ drive.mount('/content/drive')
 
 cells.append(nbf.v4.new_code_cell(
 """# (b) git clone/pull THIS repo into /content/ — no code is ever hand-copied.
-# Also sets DRIVE_ROOT immediately so every later cell (including Kaggle
-# auth and lcmunet.paths.get_paths()) can rely on it being set.
+# Also sets DRIVE_ROOT and resolves `paths` immediately so every later cell
+# can rely on both being set.
 import os
 import subprocess
 
@@ -71,6 +73,9 @@ os.chdir(REPO_DIR)
 os.environ["DRIVE_ROOT"] = DRIVE_ROOT
 print("Working directory:", os.getcwd())
 print("DRIVE_ROOT:", os.environ["DRIVE_ROOT"])
+
+from lcmunet.paths import get_paths
+paths = get_paths()
 """
 ))
 
@@ -81,20 +86,7 @@ cells.append(nbf.v4.new_code_cell(
 ))
 
 cells.append(nbf.v4.new_code_cell(
-"""# (d) Kaggle auth, best-effort/informational here (never crashes the
-# notebook — Kvasir-SEG and the ISIC2017 S3 primary path don't need it).
-# The dataset-prep cell below enforces this FOR REAL (fails loudly, but only
-# for CVC/ISIC2018/ISIC2017-fallback specifically) via the same function.
-from lcmunet.paths import get_paths
-from lcmunet.data.kaggle_auth import try_ensure_kaggle_auth
-
-paths = get_paths()
-try_ensure_kaggle_auth(paths)
-"""
-))
-
-cells.append(nbf.v4.new_code_cell(
-"""# (e) print GPU name and free VRAM — GPU gates are confirmed by YOU pasting
+"""# (d) print GPU name and free VRAM — GPU gates are confirmed by YOU pasting
 # this output back, never claimed by the agent.
 import torch
 
@@ -110,13 +102,14 @@ else:
 ))
 
 cells.append(nbf.v4.new_code_cell(
-"""# (f) LAST setup cell: download + extract + split ALL FOUR datasets
-# (methodology section 7), one call, fully idempotent. This is the entire
-# "download-and-prepare" pipeline — no other notebook, no other cell, is
-# needed. A per-dataset PASS/FAIL summary table prints at the end; any
-# single dataset failing (e.g. missing Kaggle auth, a dead link) does not
-# block the others. Re-running this in a new session is fast: already-ready
-# datasets are skipped instantly (no re-download, no re-extraction).
+"""# (e) LAST setup cell: extract + split ALL FOUR datasets (methodology
+# section 7) from whatever .zip you've placed under data_raw/, one call,
+# fully idempotent. This is the entire "prepare" pipeline — no other
+# notebook, no other cell, is needed, and nothing is downloaded here (see
+# lcmunet/data/download.py). A per-dataset PASS/FAIL summary table prints
+# at the end; any single dataset with no .zip placed yet (or a bad archive)
+# does not block the others. Re-running this in a new session is instant
+# for already-prepared datasets (see lcmunet/data/prepare_all.py).
 from lcmunet.data.prepare_all import prepare_all_datasets
 
 data_report = prepare_all_datasets(paths)
@@ -124,7 +117,7 @@ data_report = prepare_all_datasets(paths)
 ))
 
 cells.append(nbf.v4.new_code_cell(
-"""# (g) single call that drives the job queue (results/manifest.json on Drive).
+"""# (f) single call that drives the job queue (results/manifest.json on Drive).
 # Training/runner logic does not exist yet (infra-layer only, per methodology
 # Week 1); run_all_pending() will raise NotImplementedError until it does.
 from lcmunet.run_manifest import run_queue

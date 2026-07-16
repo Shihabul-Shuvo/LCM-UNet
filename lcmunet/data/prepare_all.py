@@ -1,29 +1,36 @@
-"""Single entry point for the entire download-and-prepare pipeline
-(methodology section 7): download -> extract -> preprocess -> split, for
-all four datasets, called from ONE cell in notebooks/colab_runner.ipynb.
+"""Single entry point for the entire prepare pipeline (methodology section
+7): extract -> preprocess -> split, for all four datasets, called from ONE
+cell in notebooks/colab_runner.ipynb. Nothing is downloaded here -- the
+user places each dataset's .zip under DRIVE_ROOT/data_raw/<Name>/ by hand
+(see lcmunet/data/download.py's module docstring for exactly where to get
+each one and what filename convention to expect).
 
-Idempotent end to end: a dataset already fully present under data_raw/ (raw
-pairs + split file) is a fast, no-network no-op on re-run -- nothing is
-re-downloaded, re-extracted, or re-split unnecessarily (lcmunet.data.
-download's ensure_* functions and lcmunet.data.splits' build_*_split
-functions are each independently idempotent; this module just chains them).
+Idempotent end to end, with two layers of caching:
+  1. DRIVE_ROOT/data/<name>/prepared.json -- a marker written once a
+     dataset's raw pairs + split are both confirmed ready. If present, the
+     dataset is skipped INSTANTLY (no filesystem scan at all) on every
+     later session -- this is the fast path re-running colab_runner.ipynb
+     every session relies on. Delete this file to force a full re-check.
+  2. Even without the marker, lcmunet.data.download's ensure_* functions
+     and lcmunet.data.splits' build_*_split functions are each
+     independently idempotent (they check the actual extracted/split state
+     before doing any work), so a missing-marker-but-actually-ready dataset
+     still resolves fast, just not "instant".
 
-Per-dataset failures (missing Kaggle auth, a dead link, a changed archive
-layout, a CVC sequence-leakage assertion) are caught individually here --
-one bad dataset never blocks the other three. Preprocessing itself
-(resize/normalise/binarise, lcmunet/data/preprocess.py) is applied lazily,
-per-sample, by the DataLoader -- there is no separate batch-preprocessing
-step to run here.
+Per-dataset failures (no .zip placed yet, a changed archive layout, a CVC
+sequence-leakage assertion) are caught individually here -- one bad/missing
+dataset never blocks the other three.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import json
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from lcmunet.data import raw_layout as rl
 from lcmunet.data import splits as splits_module
 from lcmunet.data.download import ensure_dataset_ready
-from lcmunet.data.kaggle_auth import KaggleAuthMissingError
 
 _SPLIT_BUILDERS = {
     "kvasir_seg": lambda paths: splits_module.build_kvasir_split(paths),
@@ -33,18 +40,47 @@ _SPLIT_BUILDERS = {
 }
 
 
+def _marker_path(paths, name: str) -> Path:
+    return Path(paths.data) / name / "prepared.json"
+
+
+def _load_marker(paths, name: str) -> Optional[Dict[str, Any]]:
+    path = _marker_path(paths, name)
+    if not path.is_file():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None  # corrupt/partial marker -- treat as "not prepared", re-check for real
+
+
+def _write_marker(paths, name: str, n_pairs: int, counts: Dict[str, int]) -> Path:
+    path = _marker_path(paths, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"n_pairs": n_pairs, "counts": counts}, f, indent=2, sort_keys=True)
+    return path
+
+
 def _prepare_one_dataset(name: str, paths) -> Dict[str, Any]:
-    n_pairs = ensure_dataset_ready(name, paths)
+    cached = _load_marker(paths, name)
+    if cached is not None:
+        print(f"{name}: already prepared (cached at {_marker_path(paths, name)}). Skipping instantly.")
+        return {"status": "PASS", "n_pairs": cached["n_pairs"], "counts": cached["counts"], "cached": True}
+
+    n_pairs = ensure_dataset_ready(name, paths.data_raw)
     split_payload = _SPLIT_BUILDERS[name](paths)
-    return {"status": "PASS", "n_pairs": n_pairs, "counts": split_payload["counts"]}
+    _write_marker(paths, name, n_pairs, split_payload["counts"])
+    return {"status": "PASS", "n_pairs": n_pairs, "counts": split_payload["counts"], "cached": False}
 
 
 def prepare_all_datasets(paths=None) -> Dict[str, Dict[str, Any]]:
-    """Downloads (if missing), extracts, and splits all four datasets. Never
-    raises for a single dataset's failure -- returns a per-dataset report
-    dict ({"status": "PASS"/"FAIL", ...}) and prints a PASS/FAIL summary
-    table. Safe to call every Colab session: a dataset that's already fully
-    ready in Drive is a fast, no-network no-op.
+    """Extracts (from a manually-placed .zip) and splits all four datasets.
+    Never raises for a single dataset's failure -- returns a per-dataset
+    report dict ({"status": "PASS"/"FAIL", ...}) and prints a PASS/FAIL
+    summary table. Safe to call every Colab session: a dataset already
+    marked prepared in Drive is skipped instantly.
     """
     if paths is None:
         from lcmunet.paths import get_paths
@@ -56,9 +92,6 @@ def prepare_all_datasets(paths=None) -> Dict[str, Dict[str, Any]]:
         print(f"\n{'=' * 78}\n{name}\n{'=' * 78}")
         try:
             report[name] = _prepare_one_dataset(name, paths)
-        except KaggleAuthMissingError as exc:
-            print(f"[FAILED] {name}: {exc}")
-            report[name] = {"status": "FAIL", "error": str(exc)}
         except rl.RawDataMissingError as exc:
             print(exc.instructions)
             print(f"[FAILED] {name}: raw data not available.")
@@ -80,7 +113,8 @@ def _print_summary_table(report: Dict[str, Dict[str, Any]]) -> None:
         row = report[name]
         if row["status"] == "PASS":
             counts = row["counts"]
-            print(f"{name:<14} {'PASS':<6} {row['n_pairs']:>8} {counts['train']:>7} {counts['val']:>6} {counts['test']:>6}")
+            cached_note = " (cached)" if row.get("cached") else ""
+            print(f"{name:<14} {'PASS':<6} {row['n_pairs']:>8} {counts['train']:>7} {counts['val']:>6} {counts['test']:>6}{cached_note}")
         else:
             error_preview = str(row.get("error", ""))[:80]
             print(f"{name:<14} {'FAIL':<6} {'-':>8} {'-':>7} {'-':>6} {'-':>6}   ({error_preview})")
@@ -88,7 +122,7 @@ def _print_summary_table(report: Dict[str, Dict[str, Any]]) -> None:
     print("-" * len(header))
     print(f"{n_pass}/{len(rl.DATASET_NAMES)} datasets ready.")
     if n_pass < len(rl.DATASET_NAMES):
-        print("See per-dataset errors above for exactly what to fix, then re-run this cell (already-ready datasets are skipped instantly).")
+        print("See per-dataset errors above for exactly what to fix (place the missing .zip), then re-run this cell.")
 
 
 if __name__ == "__main__":
