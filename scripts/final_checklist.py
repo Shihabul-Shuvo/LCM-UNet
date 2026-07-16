@@ -110,6 +110,22 @@ def check_both_descriptors_available() -> Dict[str, Any]:
     return _result("both_descriptors_available", "FAIL", "contrast descriptor output != plain - Xn for identical conv weights.")
 
 
+def check_active_datasets_full_scope() -> Dict[str, Any]:
+    from lcmunet.config import ACTIVE_DATASETS
+    from lcmunet.data.raw_layout import DATASET_NAMES
+
+    missing = [d for d in DATASET_NAMES if d not in ACTIVE_DATASETS]
+    if not missing:
+        return _result("active_datasets_full_scope", "PASS", f"ACTIVE_DATASETS covers all {len(DATASET_NAMES)} datasets: {list(ACTIVE_DATASETS)}.")
+    return _result(
+        "active_datasets_full_scope", "FAIL",
+        f"ACTIVE_DATASETS={list(ACTIVE_DATASETS)} excludes {missing} -- a full run over all 4 "
+        "datasets is REQUIRED before final submission per the methodology (section 7). Edit "
+        "lcmunet/config.py's ACTIVE_DATASETS, commit, push, and re-run colab_runner.ipynb to "
+        "bring the excluded dataset(s) into scope (no other manual step needed).",
+    )
+
+
 # ---- artifact-dependent checks (UNKNOWN until the real Colab run exists) --
 
 
@@ -185,6 +201,8 @@ def check_mechanism_figures_present(paths) -> Dict[str, Any]:
 def check_seeds_present(paths) -> Dict[str, Any]:
     import pandas as pd
 
+    from lcmunet.config import ACTIVE_DATASETS
+
     path = Path(paths.results) / "phase2_summary.csv"
     if not path.is_file():
         return _result("seeds_present_5_3", "UNKNOWN", f"No {path} yet -- run notebooks/07_phase2.ipynb first.")
@@ -192,7 +210,11 @@ def check_seeds_present(paths) -> Dict[str, Any]:
     if df.empty:
         return _result("seeds_present_5_3", "UNKNOWN", f"{path} has no rows yet.")
 
-    expected = {"headline": 5, "headline_best_competitor": 3, "isic_generalisation": 3}
+    isic_active = any(d in ACTIVE_DATASETS for d in ("isic2017", "isic2018"))
+    expected = {"headline": 5, "headline_best_competitor": 3}
+    if isic_active:
+        expected["isic_generalisation"] = 3
+
     problems = []
     for scope, expected_n in expected.items():
         rows = df[df["scope"] == scope]
@@ -202,9 +224,11 @@ def check_seeds_present(paths) -> Dict[str, Any]:
         bad = rows[rows["n_seeds"] != expected_n]
         if len(bad):
             problems.append(f"{scope}: {len(bad)} row(s) with n_seeds != {expected_n} (found {sorted(bad['n_seeds'].unique().tolist())})")
+
+    scope_note = "" if isic_active else " isic_generalisation: N/A -- not in current scope (ISIC not in ACTIVE_DATASETS)."
     if not problems:
-        return _result("seeds_present_5_3", "PASS", "headline rows have 5 seeds; comparator/ISIC rows have 3 seeds.")
-    return _result("seeds_present_5_3", "FAIL", "; ".join(problems))
+        return _result("seeds_present_5_3", "PASS", "headline rows have 5 seeds; comparator" + ("/ISIC" if isic_active else "") + " rows have 3 seeds." + scope_note)
+    return _result("seeds_present_5_3", "FAIL", "; ".join(problems) + scope_note)
 
 
 def check_stats_computed(paths) -> Dict[str, Any]:
@@ -263,6 +287,7 @@ def run_all_checks(paths) -> List[Dict[str, Any]]:
         check_alpha_and_wdelta_defaults(),
         check_per_group_wdelta_shared_across_directions(),
         check_both_descriptors_available(),
+        check_active_datasets_full_scope(),
         check_cvc_sequence_split_zero_overlap(paths),
         check_same_scan_impl_for_all(paths),
         check_ablations_present(paths),

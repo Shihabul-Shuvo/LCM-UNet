@@ -19,6 +19,16 @@ marked optional_if_time on CVC-ClinicDB (lcmunet/experiment_matrix.py). A
 missing Kvasir comparator row is a hard failure (fail loud); a missing CVC
 comparator row degrades the "vs best competitor" comparison to "not
 available" in the report rather than crashing the whole thing.
+
+DATASET SCOPE (lcmunet.config.ACTIVE_DATASETS): dataset_headline_report and
+isic_generalisation_report check this UP FRONT and return a
+{"in_scope": False, "note": ...} stub for any dataset not currently active,
+rather than attempting a results.csv/per-image lookup that would raise
+(nothing was ever trained for it). This renders as "N/A -- not in current
+scope" in the stats report, never a crash or a blank/broken row. A full run
+over all 4 datasets (ACTIVE_DATASETS = all of
+lcmunet.data.raw_layout.DATASET_NAMES) is required before final submission
+per the methodology.
 """
 
 from __future__ import annotations
@@ -27,6 +37,7 @@ import csv as _csv
 from pathlib import Path
 from typing import Any, Dict, List
 
+from lcmunet import config as config_module
 from lcmunet import cross_dataset_eval as cde
 from lcmunet import experiment_matrix as em
 from lcmunet import stats
@@ -34,6 +45,15 @@ from lcmunet.config import RunConfig
 from lcmunet.gate2_report import require_gate2_proceed
 
 COMPARATOR_MODEL_NAMES = ("unet", "malunet", "egeunet")
+
+NOT_IN_SCOPE_NOTE = (
+    "N/A -- not in current scope (dataset not in lcmunet.config.ACTIVE_DATASETS). "
+    "A full run over all 4 datasets is required before final submission per the methodology."
+)
+
+
+def _not_in_scope_report(dataset: str) -> Dict[str, Any]:
+    return {"dataset": dataset, "in_scope": False, "note": f"{dataset}: {NOT_IN_SCOPE_NOTE}"}
 
 
 def _headline_configs(headline_rows: Dict[str, RunConfig], dataset: str, model_role: str, seeds: List[int]) -> List[RunConfig]:
@@ -67,7 +87,13 @@ def dataset_headline_report(
     baseline, hero vs GLGF, hero vs best competitor -- 'best competitor' is
     only included if comparator results are available; see module
     docstring for the required-vs-optional policy).
+
+    Returns {"in_scope": False, "note": ...} immediately, without any
+    results.csv lookup, if `dataset` is not currently in ACTIVE_DATASETS.
     """
+    if dataset not in config_module.ACTIVE_DATASETS:
+        return _not_in_scope_report(dataset)
+
     scan_impl, _source = em.resolve_scan_impl(paths)
     headline_rows = dict(em.build_phase2_headline(scan_impl, hero_descriptor_type=hero_descriptor_type))
 
@@ -77,6 +103,7 @@ def dataset_headline_report(
 
     report: Dict[str, Any] = {
         "dataset": dataset,
+        "in_scope": True,
         "models": {
             "baseline_pvm": _model_summary(paths, "Baseline PVM", baseline_configs),
             "glgf": _model_summary(paths, "GLGF late-fusion", glgf_configs),
@@ -110,7 +137,15 @@ def dataset_headline_report(
 def isic_generalisation_report(paths, dataset: str, hero_descriptor_type: str, seeds: List[int]) -> Dict[str, Any]:
     """Hero vs baseline only (no GLGF, no comparators, per this prompt's
     spec) on one ISIC version -- still a full paired comparison (same
-    mechanism as the in-domain headline tables), just a smaller table."""
+    mechanism as the in-domain headline tables), just a smaller table.
+
+    Returns {"in_scope": False, "note": ...} immediately, without any
+    results.csv/per-image lookup, if `dataset` is not currently in
+    ACTIVE_DATASETS (see module docstring).
+    """
+    if dataset not in config_module.ACTIVE_DATASETS:
+        return _not_in_scope_report(dataset)
+
     scan_impl, _source = em.resolve_scan_impl(paths)
     isic_rows = dict(em.build_phase2_isic(scan_impl, hero_descriptor_type=hero_descriptor_type))
 
@@ -119,6 +154,7 @@ def isic_generalisation_report(paths, dataset: str, hero_descriptor_type: str, s
 
     return {
         "dataset": dataset,
+        "in_scope": True,
         "models": {
             "baseline_pvm": _model_summary(paths, "Baseline PVM", baseline_configs),
             "hero": _model_summary(paths, "LC-SS2D (ours)", hero_configs),
@@ -148,6 +184,8 @@ def _write_summary_csv(path: Path, headline_reports: List[Dict[str, Any]], isic_
     rows: List[Dict[str, Any]] = []
 
     for report in headline_reports:
+        if not report.get("in_scope", True):
+            continue  # N/A -- not in current scope; omitted from the CSV, noted in the .md instead
         for key, summary in report["models"].items():
             rows.append({
                 "scope": "headline", "dataset": report["dataset"], "train_dataset": "", "test_dataset": "",
@@ -163,6 +201,8 @@ def _write_summary_csv(path: Path, headline_reports: List[Dict[str, Any]], isic_
             })
 
     for report in isic_reports:
+        if not report.get("in_scope", True):
+            continue  # N/A -- not in current scope; omitted from the CSV, noted in the .md instead
         for key, summary in report["models"].items():
             rows.append({
                 "scope": "isic_generalisation", "dataset": report["dataset"], "train_dataset": "", "test_dataset": "",
@@ -189,6 +229,9 @@ def _fmt_pct(x: float) -> str:
 
 
 def _render_headline_section(report: Dict[str, Any]) -> List[str]:
+    if not report.get("in_scope", True):
+        return [f"### {report['dataset']}", "", report["note"], ""]
+
     lines = [f"### {report['dataset']}", ""]
     lines.append("| Model | n seeds | mean DSC | std | 95% CI |")
     lines.append("|:--|--:|--:|--:|:--|")
@@ -216,6 +259,9 @@ def _render_headline_section(report: Dict[str, Any]) -> List[str]:
 
 
 def _render_isic_section(report: Dict[str, Any]) -> List[str]:
+    if not report.get("in_scope", True):
+        return [f"### {report['dataset']}", "", report["note"], ""]
+
     lines = [f"### {report['dataset']}", ""]
     lines.append("| Model | n seeds | mean DSC | std | 95% CI |")
     lines.append("|:--|--:|--:|--:|:--|")
@@ -249,6 +295,13 @@ def render_stats_report_md(
         "(section 8 allows either)."
     )
     lines.append("")
+    if set(config_module.ACTIVE_DATASETS) != {"kvasir_seg", "cvc_clinicdb", "isic2017", "isic2018"}:
+        lines.append(
+            f"**SCOPE: ACTIVE_DATASETS = {list(config_module.ACTIVE_DATASETS)}** (lcmunet/config.py). Any dataset "
+            "not listed here is reported \"N/A -- not in current scope\" below, not an error. A full "
+            "run over all 4 datasets is required before final submission per the methodology."
+        )
+        lines.append("")
 
     lines.append("## Headline results (Kvasir-SEG, CVC-ClinicDB)")
     lines.append("")

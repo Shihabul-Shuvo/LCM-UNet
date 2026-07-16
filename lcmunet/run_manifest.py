@@ -154,6 +154,118 @@ def reset_stale(results_dir: str | Path, timeout_min: float = 30.0) -> List[str]
     return reclaimed
 
 
+def _resolve_hero_descriptor_type(paths) -> str:
+    """Opportunistic: uses Gate-2's real desc_winner if Gate-2 has already
+    PROCEED'd (methodology section 10.1: "winner used in all later
+    results"), else falls back to 'contrast' (the a-priori default,
+    lcmunet.config.DEFAULT_MODEL_CFG). Never hard-requires Gate-2 -- this is
+    called unconditionally every colab_runner.ipynb session, often long
+    before Phase-1 has even finished, and enqueuing Phase-2 jobs (PENDING,
+    not run) is harmless; the real gate is enforced separately, at
+    run_queue time, via job_filter / lcmunet.gate2_report.require_gate2_proceed.
+    """
+    try:
+        from lcmunet.gate2_report import require_gate2_proceed
+
+        gate2_rules = require_gate2_proceed(paths)
+        return gate2_rules["desc_winner"]
+    except Exception:  # noqa: BLE001 -- Gate-2 not run/not PROCEED yet is the common, expected case here
+        return "contrast"
+
+
+def sync_manifest_with_active_datasets(
+    paths=None,
+    hero_descriptor_type: Optional[str] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Idempotently enqueues every RunConfig in the full experiment matrix
+    (lcmunet.experiment_matrix.build_all: Phase-1 Kvasir ablations, Phase-2
+    headline/ISIC/comparator rows) whose `.dataset` is currently in
+    lcmunet.config.ACTIVE_DATASETS. Configs for a dataset NOT in scope are
+    never written or enqueued at all -- not as PENDING, not as a
+    placeholder; they simply don't exist in the manifest until that dataset
+    is added to ACTIVE_DATASETS and this is called again.
+
+    Cross-dataset generalisation (Kvasir<->CVC) needs no separate handling
+    here: it is an EVALUATION step over the already-trained Kvasir/CVC
+    Phase-2 headline hero+baseline checkpoints (lcmunet/cross_dataset_eval.py),
+    not a distinct RunConfig/manifest job -- enqueuing those headline rows
+    (already covered by build_all() above) is exactly what it needs.
+
+    IDEMPOTENT: lcmunet.run_manifest.enqueue() is already a no-op for a
+    config_id already in the manifest (any status: PENDING/RUNNING/DONE/
+    FAILED) -- calling this function 50 times in a row, or once every
+    colab_runner.ipynb session, produces byte-identical results except for
+    genuinely NEW jobs the first time a dataset newly enters ACTIVE_DATASETS.
+    Existing jobs' status/heartbeat/error are never touched here.
+
+    dry_run=True builds and classifies the matrix but writes nothing (no
+    config .yaml files, manifest.json untouched) -- for reporting/preview.
+    """
+    if paths is None:
+        from lcmunet.paths import get_paths
+
+        paths = get_paths()
+
+    from lcmunet import experiment_matrix as em
+    from lcmunet.config import ACTIVE_DATASETS
+
+    scan_impl, scan_impl_source = em.resolve_scan_impl(paths)
+    if hero_descriptor_type is None:
+        hero_descriptor_type = _resolve_hero_descriptor_type(paths)
+
+    merged = em.build_all(scan_impl, hero_descriptor_type=hero_descriptor_type)
+    before_ids = set(_read(paths.results)["jobs"].keys())
+
+    in_scope: Dict[str, Any] = {}
+    out_of_scope_datasets = set()
+    for config_id, (config, roles) in merged.items():
+        if config.dataset not in ACTIVE_DATASETS:
+            out_of_scope_datasets.add(config.dataset)
+            continue
+        in_scope[config_id] = (config, roles)
+        if not dry_run:
+            yaml_path = Path(paths.configs) / f"{config_id}.yaml"
+            config.save_yaml(yaml_path)
+            enqueue(paths.results, config_id, str(yaml_path))
+
+    newly_enqueued = sorted(set(in_scope) - before_ids) if not dry_run else []
+
+    return {
+        "scan_impl": scan_impl,
+        "scan_impl_source": scan_impl_source,
+        "hero_descriptor_type": hero_descriptor_type,
+        "active_datasets": list(ACTIVE_DATASETS),
+        "in_scope": in_scope,  # {config_id: (RunConfig, [roles, ...])}
+        "out_of_scope_datasets": sorted(out_of_scope_datasets),
+        "n_out_of_scope_configs": len(merged) - len(in_scope),
+        "newly_enqueued": newly_enqueued,
+        "dry_run": dry_run,
+    }
+
+
+def manifest_status_counts_by_dataset(paths) -> Dict[str, Dict[str, int]]:
+    """{dataset: {STATUS: count}} over every job currently in the manifest,
+    keyed by looking up each job's config_id against the full experiment
+    matrix (Phase-1+Phase-2, all 4 datasets, so this reflects jobs enqueued
+    under any past ACTIVE_DATASETS setting, not just the current one) --
+    for a session-summary print, not used by run_queue itself.
+    """
+    from lcmunet import experiment_matrix as em
+
+    scan_impl, _source = em.resolve_scan_impl(paths)
+    merged = em.build_all(scan_impl)
+    dataset_of_config_id = {cid: config.dataset for cid, (config, _roles) in merged.items()}
+
+    manifest = _read(paths.results)
+    counts: Dict[str, Dict[str, int]] = {}
+    for config_id, job in manifest["jobs"].items():
+        dataset = dataset_of_config_id.get(config_id, "unknown")
+        bucket = counts.setdefault(dataset, {s: 0 for s in _STATUSES})
+        bucket[job["status"]] = bucket.get(job["status"], 0) + 1
+    return counts
+
+
 def run_queue(
     results_dir: str | Path,
     runner_fn: Callable[[Dict[str, Any]], None],

@@ -193,6 +193,64 @@ def test_seeds_present_fails_on_wrong_counts(paths):
     assert "headline" in result["detail"]
 
 
+def test_seeds_present_passes_when_isic_missing_but_not_in_active_datasets(paths, monkeypatch):
+    from lcmunet import config as config_module
+
+    monkeypatch.setattr(config_module, "ACTIVE_DATASETS", ["kvasir_seg", "cvc_clinicdb"])
+
+    rows = [
+        {"scope": "headline", "dataset": "kvasir_seg", "model_name": "lc_ss2d", "n_seeds": 5},
+        {"scope": "headline_best_competitor", "dataset": "kvasir_seg", "model_name": "unet", "n_seeds": 3},
+        # deliberately NO isic_generalisation row at all
+    ]
+    path = Path(paths.results) / "phase2_summary.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+    result = fc.check_seeds_present(paths)
+    assert result["status"] == "PASS"
+    assert "N/A" in result["detail"] or "not in current scope" in result["detail"]
+
+
+def test_seeds_present_fails_when_isic_missing_and_isic_is_active(paths, monkeypatch):
+    from lcmunet import config as config_module
+
+    monkeypatch.setattr(config_module, "ACTIVE_DATASETS", ["kvasir_seg", "cvc_clinicdb", "isic2017", "isic2018"])
+
+    rows = [
+        {"scope": "headline", "dataset": "kvasir_seg", "model_name": "lc_ss2d", "n_seeds": 5},
+        {"scope": "headline_best_competitor", "dataset": "kvasir_seg", "model_name": "unet", "n_seeds": 3},
+        # no isic_generalisation row -- now a real problem since ISIC is active
+    ]
+    path = Path(paths.results) / "phase2_summary.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+    result = fc.check_seeds_present(paths)
+    assert result["status"] == "FAIL"
+    assert "isic_generalisation" in result["detail"]
+
+
+def test_active_datasets_full_scope_fails_when_isic_excluded(monkeypatch):
+    from lcmunet import config as config_module
+
+    monkeypatch.setattr(config_module, "ACTIVE_DATASETS", ["kvasir_seg", "cvc_clinicdb"])
+
+    result = fc.check_active_datasets_full_scope()
+    assert result["status"] == "FAIL"
+    assert "isic2017" in result["detail"] and "isic2018" in result["detail"]
+    assert "full run over all 4" in result["detail"]
+
+
+def test_active_datasets_full_scope_passes_when_all_four_active(monkeypatch):
+    from lcmunet import config as config_module
+
+    monkeypatch.setattr(config_module, "ACTIVE_DATASETS", ["kvasir_seg", "cvc_clinicdb", "isic2017", "isic2018"])
+
+    result = fc.check_active_datasets_full_scope()
+    assert result["status"] == "PASS"
+
+
 def test_stats_computed_passes_when_report_has_expected_content(paths):
     path = Path(paths.results) / "stats_report.md"
     path.parent.mkdir(parents=True, exist_ok=True)

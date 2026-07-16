@@ -325,6 +325,9 @@ def statistics_table(
         except RuntimeError as exc:
             notes.append(f"{dataset} (headline): SKIPPED -- {exc}")
             continue
+        if not report.get("in_scope", True):
+            notes.append(report["note"])
+            continue
         rows.extend(_flatten_comparisons(dataset, report))
 
     for dataset in isic_datasets:
@@ -332,6 +335,9 @@ def statistics_table(
             report = pr.isic_generalisation_report(paths, dataset, hero_descriptor_type, list(em.OTHER_SEEDS))
         except RuntimeError as exc:
             notes.append(f"{dataset}: SKIPPED -- {exc}")
+            continue
+        if not report.get("in_scope", True):
+            notes.append(report["note"])
             continue
         rows.extend(_flatten_comparisons(dataset, report))
 

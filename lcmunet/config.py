@@ -15,6 +15,20 @@ from typing import Any, Dict
 
 import yaml
 
+# Edit this single list to change which datasets are in scope.
+# Currently active: Kvasir-SEG + CVC-ClinicDB only.
+# To add ISIC back later, change to:
+# ACTIVE_DATASETS = ["kvasir_seg", "cvc_clinicdb", "isic2017", "isic2018"]
+ACTIVE_DATASETS = ["kvasir_seg", "cvc_clinicdb"]
+# All 4 dataset names remain valid keys everywhere in the codebase (raw
+# layout, splits, RunConfig.dataset, experiment_matrix roles, etc.) --
+# ACTIVE_DATASETS only controls which ones are currently in scope for
+# downloading (lcmunet/data/prepare_all.py), preparing, and enqueuing
+# experiments (lcmunet/run_manifest.py's sync_manifest_with_active_datasets).
+# After editing this list: commit, push, then just re-run
+# notebooks/colab_runner.ipynb (Run All) -- nothing else needs to be run by
+# hand.
+
 # Open dict of LC-SS2D / ablation toggles. Keys are "open" (extensible) by
 # design so new ablation rows (e.g. Ablation B's condition target, the Bound
 # ablation) can be added later without changing the RunConfig schema.

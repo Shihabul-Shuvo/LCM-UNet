@@ -14,7 +14,9 @@ nb["metadata"] = {
 cells = []
 
 cells.append(nbf.v4.new_markdown_cell(
-"""# LCM-UNet — Colab Runner (the only notebook you open in Colab)
+"""**To change dataset scope:** edit `ACTIVE_DATASETS` in `lcmunet/config.py`, commit, push, then just re-run this notebook (Run All). Nothing else needs to be run by hand.
+
+# LCM-UNet — Colab Runner (the only notebook you open in Colab)
 
 This notebook is the **bridge**. It never contains hand-copied model/training
 code — every run it pulls the latest code fresh from GitHub, so there is
@@ -23,23 +25,33 @@ never a divergence between what's on GitHub and what runs here.
 Run All top to bottom each session. Zero manual steps beyond the one-time
 dataset placement below:
 - Drive mounts, the repo is pulled, and dependencies install.
-- ALL FOUR datasets (Kvasir-SEG, CVC-ClinicDB, ISIC2017, ISIC2018) are
-  extracted and split automatically from whatever .zip you've placed
+- Every dataset in `lcmunet.config.ACTIVE_DATASETS` is extracted and split
+  automatically from whatever .zip you've placed
   (`lcmunet.data.prepare_all.prepare_all_datasets`) -- idempotent, so a
   dataset already prepared in Drive is skipped instantly on every later
-  session.
-- `run_all_pending()` resumes the training job queue from Google Drive with
-  zero manual state (see `lcmunet/run_manifest.py`).
+  session. Datasets NOT in `ACTIVE_DATASETS` are cleanly SKIPPED, not
+  treated as an error.
+- Every in-scope experiment (Phase-1 ablations, Phase-2 headline/ISIC/
+  comparator rows) is automatically enqueued as PENDING
+  (`lcmunet.run_manifest.sync_manifest_with_active_datasets`) -- also
+  idempotent: re-running this never duplicates, resets, or touches a job
+  that's already PENDING/RUNNING/DONE/FAILED.
+- A short summary prints job counts (PENDING/RUNNING/DONE/FAILED) broken
+  down by dataset, plus which datasets are currently skipped.
+- Actually **running** the job queue (`run_all_pending()`, hours of GPU
+  time) is a separate, explicit cell below -- discovering and enqueuing
+  work is automatic, starting training is a conscious action you take.
 
 If the session dies mid-run, just reopen this notebook and Run All again.
 
-**One-time setup:** download each dataset's .zip yourself (see
+**One-time setup:** download each ACTIVE dataset's .zip yourself (see
 `lcmunet/data/download.py`'s module docstring for exactly where to get each
 one) and place it anywhere under `DRIVE_ROOT/data_raw/<Name>/` (any
 filename) -- `Kvasir-SEG/`, `CVC-ClinicDB/`, `ISIC2017/`, `ISIC2018/`. This
 notebook never downloads anything itself; it only extracts + splits what's
-already there. Any dataset with no .zip placed yet is reported FAILED with
-the exact download link/filename to use, without blocking the others.
+already there, for whichever datasets are currently in scope. Any in-scope
+dataset with no .zip placed yet is reported FAILED with the exact download
+link/filename to use, without blocking the others.
 """
 ))
 
@@ -86,8 +98,8 @@ cells.append(nbf.v4.new_code_cell(
 ))
 
 cells.append(nbf.v4.new_code_cell(
-"""# (d) print GPU name and free VRAM — GPU gates are confirmed by YOU pasting
-# this output back, never claimed by the agent.
+"""# GPU name and free VRAM — GPU gates are confirmed by YOU pasting this
+# output back, never claimed by the agent.
 import torch
 
 if torch.cuda.is_available():
@@ -102,14 +114,13 @@ else:
 ))
 
 cells.append(nbf.v4.new_code_cell(
-"""# (e) LAST setup cell: extract + split ALL FOUR datasets (methodology
-# section 7) from whatever .zip you've placed under data_raw/, one call,
-# fully idempotent. This is the entire "prepare" pipeline — no other
-# notebook, no other cell, is needed, and nothing is downloaded here (see
-# lcmunet/data/download.py). A per-dataset PASS/FAIL summary table prints
-# at the end; any single dataset with no .zip placed yet (or a bad archive)
-# does not block the others. Re-running this in a new session is instant
-# for already-prepared datasets (see lcmunet/data/prepare_all.py).
+"""# (d) extract + split every dataset in lcmunet.config.ACTIVE_DATASETS from
+# whatever .zip you've placed under data_raw/, one call, fully idempotent.
+# Nothing is downloaded here (see lcmunet/data/download.py). Datasets NOT
+# in ACTIVE_DATASETS are reported SKIPPED (not an error, no data_raw/
+# folder required); any per-dataset failure among the ACTIVE ones does not
+# block the others. Re-running this in a new session is instant for
+# already-prepared datasets (see lcmunet/data/prepare_all.py).
 from lcmunet.data.prepare_all import prepare_all_datasets
 
 data_report = prepare_all_datasets(paths)
@@ -117,9 +128,49 @@ data_report = prepare_all_datasets(paths)
 ))
 
 cells.append(nbf.v4.new_code_cell(
-"""# (f) single call that drives the job queue (results/manifest.json on Drive).
-# Training/runner logic does not exist yet (infra-layer only, per methodology
-# Week 1); run_all_pending() will raise NotImplementedError until it does.
+"""# (e) automatically enqueue every in-scope experiment (Phase-1 ablations,
+# Phase-2 headline/ISIC/comparator rows) as PENDING in results/manifest.json
+# -- fully idempotent (never duplicates/resets/touches an existing job; see
+# lcmunet/run_manifest.py's sync_manifest_with_active_datasets docstring).
+# Datasets not in ACTIVE_DATASETS simply have no jobs enqueued for them.
+from lcmunet.run_manifest import sync_manifest_with_active_datasets
+
+sync_report = sync_manifest_with_active_datasets(paths)
+print(f"scan_impl = {sync_report['scan_impl']!r} (source: {sync_report['scan_impl_source']})")
+print(f"hero_descriptor_type = {sync_report['hero_descriptor_type']!r}")
+print(f"ACTIVE_DATASETS = {sync_report['active_datasets']}")
+print(f"in-scope jobs: {len(sync_report['in_scope'])} ({len(sync_report['newly_enqueued'])} newly enqueued this run)")
+if sync_report["out_of_scope_datasets"]:
+    print(f"out-of-scope datasets (no jobs enqueued): {sync_report['out_of_scope_datasets']} ({sync_report['n_out_of_scope_configs']} config(s) skipped)")
+"""
+))
+
+cells.append(nbf.v4.new_code_cell(
+"""# (f) short summary: PENDING/RUNNING/DONE/FAILED job counts broken down by
+# dataset, plus which datasets are currently skipped -- so a glance at this
+# cell tells you exactly what's queued and what isn't, every session.
+from lcmunet.data import raw_layout as rl
+from lcmunet.config import ACTIVE_DATASETS
+from lcmunet.run_manifest import manifest_status_counts_by_dataset
+
+counts_by_dataset = manifest_status_counts_by_dataset(paths)
+print("=== Job queue summary (results/manifest.json) ===")
+print(f"{'dataset':<14} {'PENDING':>8} {'RUNNING':>8} {'DONE':>8} {'FAILED':>8}")
+for dataset in rl.DATASET_NAMES:
+    if dataset not in ACTIVE_DATASETS:
+        print(f"{dataset:<14} {'SKIPPED (not in ACTIVE_DATASETS)':>34}")
+        continue
+    c = counts_by_dataset.get(dataset, {})
+    print(f"{dataset:<14} {c.get('PENDING', 0):>8} {c.get('RUNNING', 0):>8} {c.get('DONE', 0):>8} {c.get('FAILED', 0):>8}")
+"""
+))
+
+cells.append(nbf.v4.new_code_cell(
+"""# (g) single call that drives the job queue (results/manifest.json on Drive).
+# Discovering/enqueuing work above is automatic; actually running hours of
+# training is a separate, deliberate action -- call run_all_pending()
+# yourself in a new cell/session when you're ready, it is never invoked
+# automatically by Run All.
 from lcmunet.run_manifest import run_queue
 
 
@@ -139,7 +190,7 @@ def run_all_pending(max_minutes: float = 300.0) -> None:
     run_queue(paths.results, runner_fn, max_minutes=max_minutes)
 
 
-print("Bridge ready. Call run_all_pending() once the training entrypoint exists.")
+print("Bridge ready. Call run_all_pending() yourself, in a new cell, when you're ready to spend GPU-hours.")
 """
 ))
 

@@ -2,7 +2,23 @@ import dataclasses
 
 import pytest
 
-from lcmunet.config import DEFAULT_MODEL_CFG, RunConfig
+from lcmunet.config import ACTIVE_DATASETS, DEFAULT_MODEL_CFG, RunConfig
+from lcmunet.data.raw_layout import DATASET_NAMES
+
+
+def test_active_datasets_current_default_is_kvasir_and_cvc_only():
+    assert list(ACTIVE_DATASETS) == ["kvasir_seg", "cvc_clinicdb"]
+
+
+def test_active_datasets_are_all_valid_dataset_names():
+    assert set(ACTIVE_DATASETS) <= set(DATASET_NAMES)
+
+
+def test_all_four_dataset_names_remain_valid_regardless_of_active_datasets():
+    """ACTIVE_DATASETS only controls scope -- it must never shrink the set
+    of dataset names other modules (raw_layout, splits, RunConfig.dataset)
+    are allowed to use."""
+    assert set(DATASET_NAMES) == {"kvasir_seg", "cvc_clinicdb", "isic2017", "isic2018"}
 
 
 def _make_config(**overrides) -> RunConfig:

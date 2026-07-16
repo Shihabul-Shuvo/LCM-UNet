@@ -1,8 +1,10 @@
 import json
 import time
+from pathlib import Path
 
 import pytest
 
+from lcmunet import config as config_module
 from lcmunet import run_manifest as rm
 
 
@@ -159,3 +161,53 @@ def test_run_queue_resumes_stale_job_from_fresh_session(tmp_path):
     assert seen == ["cfg_a"]
     manifest = rm._read(tmp_path)
     assert manifest["jobs"]["cfg_a"]["status"] == rm.STATUS_DONE
+
+
+# ---- sync_manifest_with_active_datasets (dataset-scope toggle) --------------
+# The full multi-dataset scenario (item 6 of the prompt: switching scope,
+# idempotency across repeated calls) lives in
+# tests/test_dataset_scope_integration.py, alongside prepare_all_datasets.
+# These are the narrower, single-concern tests specific to run_manifest.py.
+
+
+def test_sync_manifest_dry_run_writes_nothing(paths, monkeypatch):
+    monkeypatch.setattr(config_module, "ACTIVE_DATASETS", ["kvasir_seg", "cvc_clinicdb"])
+
+    result = rm.sync_manifest_with_active_datasets(paths, dry_run=True)
+
+    assert result["dry_run"] is True
+    assert len(result["in_scope"]) > 0
+    assert result["newly_enqueued"] == []
+    assert not (paths.results / "manifest.json").exists()
+    assert not any(Path(paths.configs).glob("*.yaml"))
+
+
+def test_sync_manifest_only_datasets_in_scope_get_config_yaml_files(paths, monkeypatch):
+    monkeypatch.setattr(config_module, "ACTIVE_DATASETS", ["kvasir_seg", "cvc_clinicdb"])
+
+    rm.sync_manifest_with_active_datasets(paths)
+
+    from lcmunet.config import RunConfig
+
+    yaml_files = list(Path(paths.configs).glob("*.yaml"))
+    assert len(yaml_files) > 0
+    for path in yaml_files:
+        loaded = RunConfig.load_yaml(path)
+        assert loaded.dataset in ("kvasir_seg", "cvc_clinicdb")
+
+
+def test_manifest_status_counts_by_dataset_breaks_down_correctly(paths, monkeypatch):
+    monkeypatch.setattr(config_module, "ACTIVE_DATASETS", ["kvasir_seg", "cvc_clinicdb"])
+    rm.sync_manifest_with_active_datasets(paths)
+
+    job = rm.next_pending(paths.results)
+    rm.mark_done(paths.results, job["config_id"])
+
+    counts = rm.manifest_status_counts_by_dataset(paths)
+
+    total_done = sum(bucket.get("DONE", 0) for bucket in counts.values())
+    assert total_done == 1
+    assert set(counts) <= {"kvasir_seg", "cvc_clinicdb"}  # nothing enqueued references isic2017/isic2018
+
+    total_pending = sum(bucket.get("PENDING", 0) for bucket in counts.values())
+    assert total_pending == sum(1 for j in rm._read(paths.results)["jobs"].values() if j["status"] == rm.STATUS_PENDING)

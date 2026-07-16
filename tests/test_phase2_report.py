@@ -10,6 +10,7 @@ evaluation itself).
 
 import numpy as np
 
+from lcmunet import config as config_module
 from lcmunet import experiment_matrix as em
 from lcmunet import phase2_report as pr
 from lcmunet import cross_dataset_eval as cde
@@ -55,6 +56,12 @@ def test_generate_phase2_summary_end_to_end(make_kvasir_raw, make_cvc_raw, make_
     from lcmunet.data import raw_layout as rl
     from lcmunet.data.splits import build_kvasir_split, build_cvc_split, build_isic_split
     from lcmunet.engine import run_one
+
+    # This test exercises the FULL 4-dataset report (including ISIC), so all
+    # 4 must be in scope regardless of the current ACTIVE_DATASETS default
+    # (lcmunet/config.py) -- see test_phase2_report_isic_not_in_scope below
+    # for the "ISIC excluded" behaviour this same module now also supports.
+    monkeypatch.setattr(config_module, "ACTIVE_DATASETS", ["kvasir_seg", "cvc_clinicdb", "isic2017", "isic2018"])
 
     monkeypatch.setattr(em, "EPOCHS", 1)
     monkeypatch.setattr(em, "INPUT_SIZE", 64)
@@ -145,3 +152,62 @@ def test_generate_phase2_summary_end_to_end(make_kvasir_raw, make_cvc_raw, make_
     assert "Best competitor" in md
     assert "not available" in md.lower() or "optional_if_time" in md.lower()  # CVC's graceful-degradation note
     assert "Cross-dataset generalisation" in md
+
+
+def test_isic_generalisation_report_not_in_scope_returns_stub(paths, monkeypatch):
+    """With ACTIVE_DATASETS excluding ISIC (the current production default),
+    isic_generalisation_report must return an in_scope=False stub -- no
+    results.csv/per-image lookup at all, no crash, no blank/broken row."""
+    monkeypatch.setattr(config_module, "ACTIVE_DATASETS", ["kvasir_seg", "cvc_clinicdb"])
+
+    report = pr.isic_generalisation_report(paths, "isic2017", "contrast", [42, 43, 44])
+
+    assert report == {
+        "dataset": "isic2017",
+        "in_scope": False,
+        "note": f"isic2017: {pr.NOT_IN_SCOPE_NOTE}",
+    }
+    assert "N/A" in report["note"]
+    assert "not in current scope" in report["note"]
+
+
+def test_dataset_headline_report_not_in_scope_returns_stub(paths, monkeypatch):
+    monkeypatch.setattr(config_module, "ACTIVE_DATASETS", ["kvasir_seg"])  # cvc_clinicdb excluded
+
+    report = pr.dataset_headline_report(paths, "cvc_clinicdb", "contrast", [42], comparators_required=False)
+
+    assert report["in_scope"] is False
+    assert "cvc_clinicdb" in report["note"]
+
+
+def test_render_sections_show_note_instead_of_crashing_when_not_in_scope():
+    stub = pr._not_in_scope_report("isic2018")
+    lines = pr._render_isic_section(stub)
+    assert any("N/A" in line for line in lines)
+    assert any("not in current scope" in line for line in lines)
+
+    headline_lines = pr._render_headline_section(stub)
+    assert any("N/A" in line for line in headline_lines)
+
+
+def test_write_summary_csv_omits_out_of_scope_reports(tmp_path):
+    stub = pr._not_in_scope_report("isic2017")
+    out_path = tmp_path / "phase2_summary.csv"
+    pr._write_summary_csv(out_path, headline_reports=[], isic_reports=[stub], cross_rows=[])
+
+    import pandas as pd
+
+    df = pd.read_csv(out_path)
+    assert len(df) == 0  # no rows at all for a fully-out-of-scope report set
+
+
+def test_render_stats_report_md_notes_partial_scope():
+    md = pr.render_stats_report_md(
+        desc_winner="contrast",
+        headline_reports=[],
+        isic_reports=[pr._not_in_scope_report("isic2017"), pr._not_in_scope_report("isic2018")],
+        cross_rows=[],
+    )
+    assert "SCOPE: ACTIVE_DATASETS" in md
+    assert "N/A" in md
+    assert "full run over all 4 datasets is required" in md

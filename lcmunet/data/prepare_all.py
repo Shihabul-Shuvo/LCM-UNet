@@ -20,6 +20,12 @@ Idempotent end to end, with two layers of caching:
 Per-dataset failures (no .zip placed yet, a changed archive layout, a CVC
 sequence-leakage assertion) are caught individually here -- one bad/missing
 dataset never blocks the other three.
+
+DATASET SCOPE (lcmunet.config.ACTIVE_DATASETS): only datasets in that list
+are attempted at all. A dataset NOT in scope is reported SKIPPED, not
+FAILED -- its data_raw/ folder is never required to exist and no error is
+raised for it. Edit ACTIVE_DATASETS in lcmunet/config.py to bring a
+dataset back into scope; the next call here will prepare it automatically.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from lcmunet import config as config_module
 from lcmunet.data import raw_layout as rl
 from lcmunet.data import splits as splits_module
 from lcmunet.data.download import ensure_dataset_ready
@@ -87,8 +94,16 @@ def prepare_all_datasets(paths=None) -> Dict[str, Dict[str, Any]]:
 
         paths = get_paths()
 
+    active_datasets = config_module.ACTIVE_DATASETS
+
     report: Dict[str, Dict[str, Any]] = {}
     for name in rl.DATASET_NAMES:
+        if name not in active_datasets:
+            print(f"\n{'=' * 78}\n{name}\n{'=' * 78}")
+            print(f"{name}: SKIPPED (not in ACTIVE_DATASETS={list(active_datasets)!r}, see lcmunet/config.py). No data_raw/ folder required while inactive.")
+            report[name] = {"status": "SKIPPED", "error": "not in ACTIVE_DATASETS"}
+            continue
+
         print(f"\n{'=' * 78}\n{name}\n{'=' * 78}")
         try:
             report[name] = _prepare_one_dataset(name, paths)
@@ -106,7 +121,7 @@ def prepare_all_datasets(paths=None) -> Dict[str, Dict[str, Any]]:
 
 def _print_summary_table(report: Dict[str, Dict[str, Any]]) -> None:
     print(f"\n{'=' * 78}\nDATA PREPARATION SUMMARY\n{'=' * 78}")
-    header = f"{'dataset':<14} {'status':<6} {'n_pairs':>8} {'train':>7} {'val':>6} {'test':>6}"
+    header = f"{'dataset':<14} {'status':<10} {'n_pairs':>8} {'train':>7} {'val':>6} {'test':>6}"
     print(header)
     print("-" * len(header))
     for name in rl.DATASET_NAMES:
@@ -114,14 +129,18 @@ def _print_summary_table(report: Dict[str, Dict[str, Any]]) -> None:
         if row["status"] == "PASS":
             counts = row["counts"]
             cached_note = " (cached)" if row.get("cached") else ""
-            print(f"{name:<14} {'PASS':<6} {row['n_pairs']:>8} {counts['train']:>7} {counts['val']:>6} {counts['test']:>6}{cached_note}")
+            print(f"{name:<14} {'PASS':<10} {row['n_pairs']:>8} {counts['train']:>7} {counts['val']:>6} {counts['test']:>6}{cached_note}")
+        elif row["status"] == "SKIPPED":
+            print(f"{name:<14} {'SKIPPED':<10} {'-':>8} {'-':>7} {'-':>6} {'-':>6}   (not in ACTIVE_DATASETS)")
         else:
             error_preview = str(row.get("error", ""))[:80]
-            print(f"{name:<14} {'FAIL':<6} {'-':>8} {'-':>7} {'-':>6} {'-':>6}   ({error_preview})")
+            print(f"{name:<14} {'FAIL':<10} {'-':>8} {'-':>7} {'-':>6} {'-':>6}   ({error_preview})")
     n_pass = sum(1 for r in report.values() if r["status"] == "PASS")
+    n_skipped = sum(1 for r in report.values() if r["status"] == "SKIPPED")
+    n_attempted = len(report) - n_skipped
     print("-" * len(header))
-    print(f"{n_pass}/{len(rl.DATASET_NAMES)} datasets ready.")
-    if n_pass < len(rl.DATASET_NAMES):
+    print(f"{n_pass}/{n_attempted} in-scope datasets ready" + (f"; {n_skipped} SKIPPED (not in ACTIVE_DATASETS)." if n_skipped else "."))
+    if n_pass < n_attempted:
         print("See per-dataset errors above for exactly what to fix (place the missing .zip), then re-run this cell.")
 
 
