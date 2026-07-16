@@ -80,7 +80,20 @@ cells.append(nbf.v4.new_code_cell(
 # with a generic "Getting requirements to build wheel did not run
 # successfully", which hides a ModuleNotFoundError: No module named 'torch'
 # a few lines up in the real log and looks like an unrelated problem.
+#
+# MAMBA_KEEP_CUDA_BUILD=TRUE is REQUIRED (verified against state-spaces/
+# mamba's own setup.py): mamba-ssm only compiles/links its CUDA
+# selective_scan_cuda extension at all when this is set. Without it, a
+# "successful", fast install still silently produces a CPU-only package and
+# SCAN_IMPL stays 'ref' regardless. With it set, setup.py first tries to
+# download a prebuilt wheel matching this exact torch/CUDA/Python build
+# (printing "Guessing wheel URL: ...") and only compiles from source if no
+# matching wheel exists -- printed here without -q so that line is visible.
+import os
 import subprocess
+
+env = os.environ.copy()
+env["MAMBA_KEEP_CUDA_BUILD"] = "TRUE"
 
 newline = chr(10)
 mamba_install_log = ""
@@ -90,12 +103,12 @@ try:
         capture_output=True, text=True, timeout=300,
     )
     result = subprocess.run(
-        ["pip", "install", "-q", "--no-build-isolation", "causal-conv1d>=1.1.0", "mamba-ssm"],
-        capture_output=True, text=True, timeout=1800,
+        ["pip", "install", "--no-build-isolation", "causal-conv1d>=1.1.0", "mamba-ssm"],
+        capture_output=True, text=True, timeout=3600, env=env,
     )
-    mamba_install_log = result.stdout[-6000:] + newline + result.stderr[-6000:]
+    mamba_install_log = result.stdout[-8000:] + newline + result.stderr[-8000:]
     print(f"mamba-ssm install return code: {result.returncode}")
-    print(mamba_install_log[-3000:])
+    print(mamba_install_log[-4000:])
 except Exception as exc:
     mamba_install_log = repr(exc)
     print("mamba-ssm install raised:", exc)
