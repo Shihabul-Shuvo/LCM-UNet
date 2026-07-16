@@ -38,11 +38,15 @@ dataset placement below:
   that's already PENDING/RUNNING/DONE/FAILED.
 - A short summary prints job counts (PENDING/RUNNING/DONE/FAILED) broken
   down by dataset, plus which datasets are currently skipped.
-- Actually **running** the job queue (`run_all_pending()`, hours of GPU
-  time) is a separate, explicit cell below -- discovering and enqueuing
-  work is automatic, starting training is a conscious action you take.
+- The job queue then **actually trains** every PENDING job
+  (`run_all_pending()`, `lcmunet.engine.run_one`) until it's empty or
+  `max_minutes` (default 5h) runs out -- this happens automatically on every
+  Run All, so opening this notebook and running it top to bottom is the
+  entire workflow. Every job start/success/failure prints live; a failed job
+  is never silent.
 
-If the session dies mid-run, just reopen this notebook and Run All again.
+If the session dies mid-run, just reopen this notebook and Run All again --
+stale RUNNING jobs are reclaimed and resumed from their last checkpoint.
 
 **One-time setup:** download each ACTIVE dataset's .zip yourself (see
 `lcmunet/data/download.py`'s module docstring for exactly where to get each
@@ -169,10 +173,9 @@ cells.append(nbf.v4.new_code_cell(
 """# (g) single call that drives the job queue (results/manifest.json on Drive),
 # training each PENDING job with lcmunet.engine.run_one (resumable: checkpoints
 # every epoch, so a killed Colab session picks up exactly where it left off).
-# Discovering/enqueuing work above is automatic; actually running hours of
-# training is a separate, deliberate action -- THIS CELL ONLY DEFINES THE
-# FUNCTION. Call run_all_pending() yourself in a new cell/session when you're
-# ready to spend GPU-hours; it is never invoked automatically by Run All.
+# Every start/success/failure prints live -- see lcmunet/run_manifest.py's
+# run_queue docstring; a failed job is never silent, it prints the error AND
+# records it in results/manifest.json's jobs.<config_id>.error.
 from lcmunet import engine
 from lcmunet.run_manifest import run_queue
 
@@ -189,9 +192,17 @@ def run_all_pending(max_minutes: float = 300.0) -> None:
         engine.run_one(job, paths=paths)
 
     run_queue(paths.results, runner_fn, max_minutes=max_minutes)
+"""
+))
 
-
-print("Bridge ready. Call run_all_pending() yourself, in a new cell, when you're ready to spend GPU-hours.")
+cells.append(nbf.v4.new_code_cell(
+"""# (h) ACTUALLY TRAINS -- calls run_all_pending() every time you Run All, so
+# opening this notebook and running it top to bottom is the entire workflow,
+# no separate manual step. This WILL start spending GPU-hours immediately on
+# every Run All (up to max_minutes, default 5h) until the queue is empty or
+# the session dies -- if you ever want discovery/enqueueing without training
+# starting, comment out this cell's call (leave run_all_pending defined above).
+run_all_pending()
 """
 ))
 

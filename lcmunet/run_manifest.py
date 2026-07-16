@@ -288,16 +288,27 @@ def run_queue(
     unfiltered) call, never touched by this one.
     """
     start = time.time()
-    reset_stale(results_dir, timeout_min=stale_timeout_min)
+    reclaimed = reset_stale(results_dir, timeout_min=stale_timeout_min)
+    if reclaimed:
+        print(f"[run_queue] reclaimed {len(reclaimed)} stale RUNNING job(s) from a killed session: {reclaimed}")
 
+    n_done = n_failed = 0
     while (time.time() - start) / 60.0 < max_minutes:
         job = next_pending(results_dir, job_filter=job_filter)
         if job is None:
+            print(f"[run_queue] no PENDING jobs left ({n_done} done, {n_failed} failed this call). Queue is empty.")
             break
         config_id = job["config_id"]
+        print(f"[run_queue] starting {config_id} -> {job['config_yaml_path']} ...")
         try:
             runner_fn(job)
         except Exception as exc:  # noqa: BLE001 - orchestration boundary, see docstring
             mark_failed(results_dir, config_id, error=repr(exc))
+            n_failed += 1
+            print(f"[run_queue] FAILED {config_id}: {exc!r} (see results/manifest.json jobs.{config_id}.error)")
         else:
             mark_done(results_dir, config_id)
+            n_done += 1
+            print(f"[run_queue] DONE {config_id}")
+    else:
+        print(f"[run_queue] max_minutes={max_minutes} budget reached ({n_done} done, {n_failed} failed this call); stopping.")
