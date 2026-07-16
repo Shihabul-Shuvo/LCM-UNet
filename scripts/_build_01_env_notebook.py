@@ -72,18 +72,30 @@ cells.append(nbf.v4.new_code_cell(
 # gate (methodology section 5.1 / section 13) -- allowed to fail. If it fails
 # or is flaky, lcmunet/scan.py falls back to the pure-PyTorch reference scan
 # and every comparison uses that instead, uniformly (methodology section 5.5).
+#
+# --no-build-isolation is required: both packages' setup.py does `import
+# torch` at build time (to detect the CUDA/ABI version to build against), but
+# pip's default isolated build sandbox does NOT have torch installed in it
+# (only this outer environment does) -- without this flag the build fails
+# with a generic "Getting requirements to build wheel did not run
+# successfully", which hides a ModuleNotFoundError: No module named 'torch'
+# a few lines up in the real log and looks like an unrelated problem.
 import subprocess
 
 newline = chr(10)
 mamba_install_log = ""
 try:
+    subprocess.run(
+        ["pip", "install", "-q", "packaging", "ninja", "wheel", "setuptools"],
+        capture_output=True, text=True, timeout=300,
+    )
     result = subprocess.run(
-        ["pip", "install", "-q", "causal-conv1d>=1.1.0", "mamba-ssm"],
+        ["pip", "install", "-q", "--no-build-isolation", "causal-conv1d>=1.1.0", "mamba-ssm"],
         capture_output=True, text=True, timeout=1800,
     )
-    mamba_install_log = result.stdout[-4000:] + newline + result.stderr[-4000:]
+    mamba_install_log = result.stdout[-6000:] + newline + result.stderr[-6000:]
     print(f"mamba-ssm install return code: {result.returncode}")
-    print(mamba_install_log[-2000:])
+    print(mamba_install_log[-3000:])
 except Exception as exc:
     mamba_install_log = repr(exc)
     print("mamba-ssm install raised:", exc)
