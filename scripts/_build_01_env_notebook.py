@@ -86,32 +86,89 @@ cells.append(nbf.v4.new_code_cell(
 # selective_scan_cuda extension at all when this is set. Without it, a
 # "successful", fast install still silently produces a CPU-only package and
 # SCAN_IMPL stays 'ref' regardless. With it set, setup.py first tries to
-# download a prebuilt wheel matching this exact torch/CUDA/Python build
-# (printing "Guessing wheel URL: ...") and only compiles from source if no
-# matching wheel exists -- printed here without -q so that line is visible.
+# download a prebuilt wheel matching this exact torch/CUDA/Python build and
+# only compiles from source if no matching wheel exists -- a source build
+# means real nvcc compilation of templated CUDA kernels, which is genuinely
+# slow (30-60+ min is normal on Colab's shared CPU), not a hang.
+#
+# TORCH_CUDA_ARCH_LIST is pinned to ONLY this session's actual GPU (instead
+# of nvcc's default of compiling for a broad list of architectures) -- the
+# single biggest lever on build time if a source build does happen, since
+# it's often the difference between compiling kernels for one architecture
+# vs six.
+#
+# Output streams live, line-by-line, instead of being captured and printed
+# only after the process exits -- so a source build is visible while it
+# happens instead of looking identical to a hang for up to an hour. The
+# timeout is enforced by joining the reader thread with a deadline, which
+# fires even if the child process has gone completely silent (e.g. mid-nvcc
+# with no progress output at all).
 import os
 import subprocess
+import threading
+import time
 
-env = os.environ.copy()
-env["MAMBA_KEEP_CUDA_BUILD"] = "TRUE"
+import torch
 
-newline = chr(10)
-mamba_install_log = ""
-try:
+INSTALL_TIMEOUT_S = 3600  # 1 hour hard ceiling.
+
+if not torch.cuda.is_available():
+    print("No CUDA device visible -- skipping the mamba-ssm install attempt "
+          "entirely (it cannot succeed usefully without a GPU, and a source "
+          "build would just burn up to an hour for nothing). Runtime > "
+          "Change runtime type > GPU, then Run All again.")
+    mamba_install_log = "skipped: no CUDA device"
+else:
+    env = os.environ.copy()
+    env["MAMBA_KEEP_CUDA_BUILD"] = "TRUE"
+    major, minor = torch.cuda.get_device_capability(0)
+    env["TORCH_CUDA_ARCH_LIST"] = f"{major}.{minor}"
+    print(f"GPU: {torch.cuda.get_device_name(0)} (compute capability {major}.{minor})")
+    print(f"TORCH_CUDA_ARCH_LIST={env['TORCH_CUDA_ARCH_LIST']} "
+          "(any source build is limited to this one architecture)")
+
     subprocess.run(
         ["pip", "install", "-q", "packaging", "ninja", "wheel", "setuptools"],
         capture_output=True, text=True, timeout=300,
     )
-    result = subprocess.run(
-        ["pip", "install", "--no-build-isolation", "causal-conv1d>=1.1.0", "mamba-ssm"],
-        capture_output=True, text=True, timeout=3600, env=env,
-    )
-    mamba_install_log = result.stdout[-8000:] + newline + result.stderr[-8000:]
-    print(f"mamba-ssm install return code: {result.returncode}")
-    print(mamba_install_log[-4000:])
-except Exception as exc:
-    mamba_install_log = repr(exc)
-    print("mamba-ssm install raised:", exc)
+
+    def _stream(cmd, env, timeout_s):
+        \"\"\"Run cmd, printing its (merged) output live, killing it on a hard
+        wall-clock deadline even if it has produced no output at all.\"\"\"
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, env=env,
+        )
+        lines = []
+
+        def _reader():
+            for line in proc.stdout:
+                lines.append(line)
+                print(line, end="")
+
+        reader_thread = threading.Thread(target=_reader, daemon=True)
+        started = time.time()
+        reader_thread.start()
+        reader_thread.join(timeout_s)
+        if reader_thread.is_alive():
+            proc.kill()
+            reader_thread.join(5)
+            elapsed = time.time() - started
+            print(f"\\n[TIMEOUT] killed after {elapsed:.0f}s (limit {timeout_s}s)")
+            return "".join(lines), "timeout"
+        returncode = proc.wait()
+        return "".join(lines), returncode
+
+    print(f"\\nInstalling (streaming output live, hard timeout {INSTALL_TIMEOUT_S}s)...\\n")
+    try:
+        mamba_install_log, status = _stream(
+            ["pip", "install", "--no-build-isolation", "causal-conv1d>=1.1.0", "mamba-ssm"],
+            env, INSTALL_TIMEOUT_S,
+        )
+        print(f"\\nmamba-ssm install finished: {status}")
+    except Exception as exc:
+        mamba_install_log = repr(exc)
+        print("mamba-ssm install raised:", exc)
 """
 ))
 
@@ -170,29 +227,44 @@ cells.append(nbf.v4.new_code_cell(
 # This exercises the REAL backbone (needs mamba-ssm to even import), unlike
 # the CPU-only shape tests in tests/test_scan.py which test lcmunet/scan.py
 # in isolation.
+#
+# Gated on SCAN_IMPL == "cuda": the vendored UltraLight_VM_UNet does
+# `from mamba_ssm import Mamba` directly (third_party/UltraLight-VM-UNet/
+# models/UltraLight_VM_UNet.py) with no ref-scan fallback of its own --
+# unlike this project's own LC-SS2D/GLGF code (lcmunet/lcm_unet.py,
+# lcmunet/glgf.py), which already goes through lcmunet/scan.py and tolerates
+# SCAN_IMPL == 'ref' fine. So when the install above fails, this specific
+# vendored comparator model genuinely cannot run -- that's expected, not a
+# bug in this notebook, so skip cleanly instead of throwing a traceback.
 import torch
 
 from lcmunet.backbone import load_ultralight_vmunet
 
-model = load_ultralight_vmunet()
-n_params = sum(p.numel() for p in model.parameters())
-print(f"UltraLight_VM_UNet params: {n_params} ({n_params / 1e6:.4f} M)")
+if SCAN_IMPL != "cuda":
+    print(f"Skipping vendored-backbone smoke test: SCAN_IMPL={SCAN_IMPL!r}.")
+    print("The vendored UltraLight_VM_UNet comparator baseline imports mamba_ssm "
+          "directly and has no pure-PyTorch fallback, so it cannot run until the "
+          "mamba-ssm install above succeeds. This does NOT block LC-SS2D/GLGF "
+          "development -- lcmunet/scan.py's own selective_scan() already works "
+          "fine under SCAN_IMPL='ref'.")
+else:
+    model = load_ultralight_vmunet()
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"UltraLight_VM_UNet params: {n_params} ({n_params / 1e6:.4f} M)")
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model = model.to(device)
+    model = model.to("cuda")
+    x = torch.randn(2, 3, 256, 256, device="cuda", requires_grad=True)
+    y = model(x)
+    print("output shape:", tuple(y.shape))
+    assert y.shape == (2, 1, 256, 256), f"unexpected output shape: {y.shape}"
 
-x = torch.randn(2, 3, 256, 256, device=device, requires_grad=True)
-y = model(x)
-print("output shape:", tuple(y.shape))
-assert y.shape == (2, 1, 256, 256), f"unexpected output shape: {y.shape}"
+    y.sum().backward()
+    assert x.grad is not None and torch.isfinite(x.grad).all(), "non-finite/missing input gradient"
+    for name, p in model.named_parameters():
+        if p.grad is not None:
+            assert torch.isfinite(p.grad).all(), f"non-finite gradient in {name}"
 
-y.sum().backward()
-assert x.grad is not None and torch.isfinite(x.grad).all(), "non-finite/missing input gradient"
-for name, p in model.named_parameters():
-    if p.grad is not None:
-        assert torch.isfinite(p.grad).all(), f"non-finite gradient in {name}"
-
-print("Forward/backward OK. All gradients finite.")
+    print("Forward/backward OK. All gradients finite.")
 """
 ))
 
