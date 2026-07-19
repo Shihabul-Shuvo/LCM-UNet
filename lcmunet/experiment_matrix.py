@@ -55,7 +55,17 @@ OTHER_SEEDS: List[int] = [42, 43, 44]
 
 # Methodology section 6: "Epochs | 250-300". One fixed value so every table
 # is directly comparable (Fairness rule) rather than a per-row choice.
-EPOCHS = 250
+#
+# TEMPORARILY 50 (was 250): a fast quick-look pass to see results sooner,
+# not the paper's final epoch budget. Every RunConfig's config_id hashes
+# `epochs` (lcmunet/config.py), so this produces a DIFFERENT set of
+# config_ids/checkpoints than the 250-epoch runs already in
+# results/manifest.json -- it does NOT resume or overwrite any in-progress
+# 250-epoch checkpoint (that checkpoint is untouched on Drive and still
+# resumable later by changing this back to 250). Before any real Phase-1/
+# Phase-2 table, set this back to 250 (or whatever's chosen in [250, 300])
+# so every compared row uses the same epoch budget.
+EPOCHS = 50
 
 # Methodology section 6: "Input | 256x256", "Batch | 8". Module-level (like
 # EPOCHS above) so tests can monkeypatch a cheap end-to-end configuration
