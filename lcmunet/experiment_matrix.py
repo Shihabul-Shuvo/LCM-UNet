@@ -38,6 +38,7 @@ rows are real, trainable jobs like every other model_name here.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -216,8 +217,62 @@ def build_phase2_comparators(scan_impl: str) -> List[Tuple[str, RunConfig]]:
 
 
 def resolve_scan_impl(paths) -> Tuple[str, str]:
-    """Returns (scan_impl, source). Prefers results/env.json, written by
-    notebooks/01_env.ipynb on the real Colab target (GLOBAL RULES rule 5:
+    """Returns (scan_impl, source). LOCKED after the first call: every
+    RunConfig's config_id hashes `scan_impl` (lcmunet/config.py), so
+    re-deriving it fresh from results/env.json every session -- as this
+    function used to -- silently mints a NEW config_id (and therefore a new,
+    empty checkpoint directory) for every already-in-progress or
+    already-DONE job the moment the Gate-0 mamba-ssm build's outcome changes
+    between sessions (e.g. it fails/times out one session, then succeeds a
+    later one). This has actually happened: a completed run's checkpoint was
+    silently orphaned this way. So the FIRST resolution here is written to
+    results/scan_impl.lock.json and every later call just returns that,
+    regardless of what env.json says by then.
+
+    This does NOT affect what actually executes: lcmunet.engine.build_model
+    gates model_name='ultralight_baseline' on the LIVE lcmunet.scan.SCAN_IMPL
+    at run time, not on this locked, per-config value -- so once mamba-ssm
+    genuinely works, that row still runs for real with the cuda scan. And
+    the Fairness-rule provenance record (methodology section 5.5: "record
+    which [scan] ran") isn't lost either -- lcmunet.engine.run_one writes
+    the LIVE SCAN_IMPL into each results.csv row independently of this
+    locked value. Only checkpoint/config_id identity is stabilised here.
+
+    To deliberately re-lock (e.g. you're confident mamba-ssm now works and
+    want every row -- including already-DONE ones -- rebuilt as "cuda" from
+    here on, accepting that this mints new config_ids for the whole matrix),
+    delete results/scan_impl.lock.json yourself first.
+    """
+    lock_path = Path(paths.results) / "scan_impl.lock.json"
+    if lock_path.is_file():
+        with open(lock_path, "r", encoding="utf-8") as f:
+            locked = json.load(f)
+        return (
+            locked["scan_impl"],
+            f"results/scan_impl.lock.json (locked {locked['locked_at']}, "
+            f"originally resolved from: {locked['original_source']})",
+        )
+
+    scan_impl, source = _resolve_scan_impl_live(paths)
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "scan_impl": scan_impl,
+                "original_source": source,
+                "locked_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            },
+            f,
+            indent=2,
+        )
+
+    return scan_impl, f"{source} (newly locked into results/scan_impl.lock.json)"
+
+
+def _resolve_scan_impl_live(paths) -> Tuple[str, str]:
+    """The pre-locking resolution logic: prefers results/env.json, written
+    by notebooks/01_env.ipynb on the real Colab target (GLOBAL RULES rule 5:
     the GPU/mamba-ssm build is verified there, not here). Falls back to this
     process's own live lcmunet.scan.SCAN_IMPL with an explicit provenance
     tag when no env.json exists yet (e.g. first run on a local CPU dev box,
