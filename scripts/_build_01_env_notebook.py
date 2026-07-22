@@ -97,6 +97,16 @@ cells.append(nbf.v4.new_code_cell(
 # it's often the difference between compiling kernels for one architecture
 # vs six.
 #
+# mamba-ssm is pinned to <2.3: 2.3.x introduced Mamba-3 support, which pulls
+# in a much heavier build (tilelang, apache-tvm-ffi, nvidia-cutlass-dsl,
+# quack-kernels -- a full separate GPU-kernel compiler toolchain on top of
+# the plain CUDA extension). This project only ever needs the classic
+# mamba_ssm.Mamba / selective_scan_fn API (unchanged since Mamba1; both
+# third_party/UltraLight-VM-UNet and lcmunet/scan.py only import that), so
+# there is no reason to pay for compiling Mamba-3's extra kernels at all --
+# doing so was observed to still be building 40+ minutes in with zero
+# output, well past what a plain arch-limited source build should take.
+#
 # Output streams live, line-by-line, instead of being captured and printed
 # only after the process exits -- so a source build is visible while it
 # happens instead of looking identical to a hang for up to an hour. The
@@ -162,7 +172,7 @@ else:
     print(f"\\nInstalling (streaming output live, hard timeout {INSTALL_TIMEOUT_S}s)...\\n")
     try:
         mamba_install_log, status = _stream(
-            ["pip", "install", "--no-build-isolation", "causal-conv1d>=1.1.0", "mamba-ssm"],
+            ["pip", "install", "--no-build-isolation", "causal-conv1d>=1.1.0", "mamba-ssm<2.3"],
             env, INSTALL_TIMEOUT_S,
         )
         print(f"\\nmamba-ssm install finished: {status}")
